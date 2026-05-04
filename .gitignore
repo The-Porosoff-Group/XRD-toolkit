@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+.conda_env/
+.gsas_tmp/
+.gsas2_src/
+uploads/
+results/
+config.yaml
+xrd_refinement_presets.json
+*.tmp
+*.log

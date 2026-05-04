@@ -1,0 +1,3502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>XRD Fitting Toolkit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:        #0d1117;
+    --surface:   #161b22;
+    --surface2:  #1c2128;
+    --border:    #2d333b;
+    --accent:    #58a6ff;
+    --accent2:   #39d353;
+    --warn:      #e3b341;
+    --danger:    #f78166;
+    --text:      #e6edf3;
+    --muted:     #7d8590;
+    --mono:      'JetBrains Mono', monospace;
+    --sans:      'Syne', sans-serif;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); overflow: hidden; }
+
+  /* ── Layout ── */
+  .app { display: grid; grid-template-columns: 220px 1fr; grid-template-rows: 56px 1fr; height: 100vh; }
+
+  /* ── Header ── */
+  header {
+    grid-column: 1 / -1;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; padding: 0 24px; gap: 12px;
+  }
+  header .logo { font-size: 18px; font-weight: 800; letter-spacing: -0.5px; color: var(--text); }
+  header .logo span { color: var(--accent); }
+  header .badge {
+    font-family: var(--mono); font-size: 10px; background: var(--surface2);
+    border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; color: var(--muted);
+  }
+
+  /* ── Sidebar ── */
+  aside {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 16px 0;
+    display: flex; flex-direction: column; gap: 2px;
+    overflow-y: auto;
+  }
+  .nav-section { padding: 8px 16px 4px; font-size: 10px; font-weight: 700; letter-spacing: 1.5px; color: var(--muted); text-transform: uppercase; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 16px; cursor: pointer; border-radius: 0;
+    font-size: 13px; font-weight: 600; color: var(--muted);
+    transition: all 0.15s; position: relative;
+  }
+  .nav-item:hover { background: var(--surface2); color: var(--text); }
+  .nav-item.active { background: rgba(88,166,255,0.1); color: var(--accent); }
+  .nav-item.active::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+    width: 3px; background: var(--accent); border-radius: 0 2px 2px 0;
+  }
+  .nav-item .soon {
+    margin-left: auto; font-size: 9px; font-family: var(--mono);
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--muted); padding: 1px 5px; border-radius: 3px;
+  }
+  .nav-item.disabled { pointer-events: none; opacity: 0.5; }
+
+  /* ── Main area ── */
+  main { overflow-y: auto; padding: 24px 28px; display: flex; flex-direction: column; gap: 20px; }
+
+  /* ── Module panels ── */
+  .module-panel { display: none; flex-direction: column; gap: 24px; }
+  .module-panel.active { display: flex; }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .card-header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .card-header h2 { font-size: 14px; font-weight: 700; }
+  .card-header .step {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: rgba(88,166,255,0.15); color: var(--accent);
+    font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .card-body { padding: 20px; }
+
+  /* ── Drop zone ── */
+  .dropzone {
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+  }
+  .dropzone:hover, .dropzone.dragover {
+    border-color: var(--accent);
+    background: rgba(88,166,255,0.05);
+  }
+  .dropzone.has-file { border-color: var(--accent2); background: rgba(57,211,83,0.05); }
+  .dropzone input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+  .dropzone-icon { font-size: 32px; margin-bottom: 10px; }
+  .dropzone-text { font-size: 14px; font-weight: 600; color: var(--muted); }
+  .dropzone-text span { color: var(--accent); }
+  .dropzone-sub { font-size: 11px; color: var(--muted); margin-top: 4px; font-family: var(--mono); }
+  .file-name { font-size: 13px; color: var(--accent2); font-family: var(--mono); font-weight: 600; }
+
+  /* ── Reaction config selector ── */
+  .config-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+  .config-card {
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .config-card:hover { border-color: var(--accent); background: rgba(88,166,255,0.05); }
+  .config-card.selected { border-color: var(--accent); background: rgba(88,166,255,0.1); }
+  .config-card .cfg-name { font-size: 12px; font-weight: 700; margin-bottom: 3px; }
+  .config-card .cfg-desc { font-size: 11px; color: var(--muted); line-height: 1.4; }
+
+  /* ── Form fields ── */
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .form-grid.three { grid-template-columns: 1fr 1fr 1fr; }
+  .form-group { display: flex; flex-direction: column; gap: 5px; }
+  .form-group.full { grid-column: 1 / -1; }
+  label { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; }
+  input[type=text], input[type=number], textarea, select {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    padding: 8px 12px;
+    transition: border-color 0.15s;
+    width: 100%;
+  }
+  input:focus, textarea:focus, select:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  textarea { resize: vertical; min-height: 60px; }
+
+  /* ── Inlet flows table ── */
+  .flow-table { width: 100%; border-collapse: collapse; }
+  .flow-table th {
+    text-align: left; font-size: 10px; font-weight: 700;
+    color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px;
+    padding: 6px 10px; border-bottom: 1px solid var(--border);
+  }
+  .flow-table td { padding: 6px 10px; }
+  .flow-table td input { background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-family: var(--mono); font-size: 13px; padding: 5px 8px; width: 100px; }
+  .flow-table td input:focus { outline: none; border-color: var(--accent); }
+  .species-label { font-family: var(--mono); font-size: 13px; }
+
+  /* ── SS range ── */
+  .ss-row { display: flex; align-items: center; gap: 12px; }
+  .ss-row span { color: var(--muted); font-size: 13px; }
+  .ss-row input { width: 90px; }
+
+  /* ── Output dir picker ── */
+  .dir-row { display: flex; gap: 8px; }
+  .dir-row input { flex: 1; }
+
+  /* ── Process button ── */
+  .btn-process {
+    background: var(--accent);
+    color: #0d1117;
+    border: none;
+    border-radius: 8px;
+    font-family: var(--sans);
+    font-size: 14px;
+    font-weight: 800;
+    padding: 13px 32px;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex; align-items: center; gap: 8px;
+    letter-spacing: 0.3px;
+  }
+  .btn-process:hover { background: #79c0ff; transform: translateY(-1px); }
+  .btn-process:active { transform: translateY(0); }
+  .btn-process:disabled { opacity: 0.4; pointer-events: none; }
+  .btn-sm {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 14px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .btn-sm:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-sm.green { border-color: var(--accent2); color: var(--accent2); }
+  .btn-sm.green:hover { background: rgba(57,211,83,0.1); }
+
+  /* ── Progress / spinner ── */
+  .progress-wrap { display: none; align-items: center; gap: 12px; padding: 14px 0; }
+  .progress-wrap.visible { display: flex; }
+  .spinner {
+    width: 20px; height: 20px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .progress-text { font-size: 13px; color: var(--muted); font-family: var(--mono); }
+
+  /* ── Results panel ── */
+  .results-panel { display: none; flex-direction: column; gap: 20px; }
+  .results-panel.visible { display: flex; }
+
+  .results-header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .results-header h3 { font-size: 16px; font-weight: 800; }
+  .pill {
+    font-size: 11px; font-family: var(--mono); font-weight: 600;
+    padding: 3px 10px; border-radius: 20px;
+  }
+.pill.green  { background: rgba(57,211,83,0.15);  color: var(--accent2); }
+.pill.blue   { background: rgba(88,166,255,0.15); color: var(--accent); }
+.pill.yellow { background: rgba(227,179,65,0.15); color: var(--warn); }
+.pill.red    { background: rgba(248,81,73,0.15);  color: var(--danger); }
+
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+  .stat-box {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .stat-box .stat-label { font-size: 10px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px; }
+  .stat-box .stat-val { font-size: 22px; font-weight: 800; font-family: var(--mono); color: var(--text); }
+  .stat-box .stat-unit { font-size: 12px; color: var(--muted); }
+
+  .sel-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+  .sel-item {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 14px; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  }
+  .sel-item .sel-sp { font-size: 11px; font-family: var(--mono); color: var(--muted); }
+  .sel-item .sel-val { font-size: 16px; font-weight: 700; font-family: var(--mono); }
+
+  .fit-guide-btn {
+    border-color: rgba(88,166,255,0.55);
+    color: var(--accent);
+  }
+  .reusable-fit {
+    background: rgba(88,166,255,0.06);
+    border: 1px solid rgba(88,166,255,0.22);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .reusable-fit h4 {
+    font-size: 12px;
+    font-weight: 800;
+    color: var(--text);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+  }
+  .reusable-fit .hint {
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.45;
+    margin-bottom: 10px;
+  }
+  .reusable-fit-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 8px;
+  }
+  .reusable-fit-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+  .reusable-fit-card .phase-name {
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 800;
+    margin-bottom: 4px;
+  }
+  .reusable-fit-card .muted { color: var(--muted); }
+  .reuse-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+    margin-top: 8px;
+  }
+  .reuse-metric {
+    min-width: 0;
+    border-top: 1px solid rgba(255,255,255,0.07);
+    padding-top: 6px;
+  }
+  .reuse-label {
+    color: var(--muted);
+    font-family: var(--sans);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .reuse-value {
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+  .reuse-chip {
+    display: inline-block;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 1px 7px;
+    margin: 2px 4px 0 0;
+    color: var(--text);
+    background: rgba(255,255,255,0.03);
+  }
+  .xrd-preset-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    border: 1px solid rgba(88,166,255,0.18);
+    border-radius: 8px;
+    background: rgba(88,166,255,0.04);
+  }
+  .xrd-preset-row select {
+    width: min(340px, 100%);
+    padding: 5px 10px;
+    font-size: 12px;
+  }
+  .xrd-preset-status {
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.35;
+  }
+  .fit-warning-panel {
+    display: none;
+    background: rgba(227,179,65,0.08);
+    border: 1px solid rgba(227,179,65,0.32);
+    border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .fit-warning-panel.visible { display: block; }
+  .fit-warning-panel h4 {
+    font-size: 12px;
+    font-weight: 800;
+    color: var(--warn);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+  }
+  .fit-warning-panel ul {
+    margin-left: 18px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.45;
+  }
+  .baseline-panel {
+    background: rgba(88,166,255,0.055);
+    border: 1px solid rgba(88,166,255,0.24);
+    border-radius: 8px;
+    padding: 13px 15px;
+  }
+  .baseline-panel h4 {
+    font-size: 12px;
+    font-weight: 800;
+    color: var(--accent);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+  }
+  .baseline-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+  }
+  .baseline-summary {
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.45;
+  }
+  .baseline-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .baseline-metric {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+  .baseline-metric .label {
+    color: var(--muted);
+    font-family: var(--sans);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 3px;
+  }
+  .baseline-detail {
+    margin-top: 8px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  .plot-img { width: 100%; border-radius: 8px; border: 1px solid var(--border); display: block; }
+  .download-row { display: flex; gap: 10px; flex-wrap: wrap; }
+
+  /* ── Coming soon overlay ── */
+  .coming-soon {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 80px 20px; gap: 14px; text-align: center;
+  }
+  .coming-soon .cs-icon { font-size: 48px; }
+  .coming-soon h2 { font-size: 20px; font-weight: 800; }
+  .coming-soon p { color: var(--muted); font-size: 14px; max-width: 360px; line-height: 1.6; }
+  .coming-soon .cs-badge {
+    font-family: var(--mono); font-size: 11px;
+    background: rgba(227,179,65,0.1); border: 1px solid var(--warn);
+    color: var(--warn); padding: 4px 12px; border-radius: 20px;
+  }
+
+  /* ── Error box ── */
+  .error-box {
+    background: rgba(247,129,102,0.08);
+    border: 1px solid rgba(247,129,102,0.3);
+    border-radius: 8px;
+    padding: 14px 18px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--danger);
+    display: none;
+    white-space: pre-wrap;
+  }
+  .error-box.visible { display: block; }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  body.xrd-only .app {
+    grid-template-columns: 1fr;
+  }
+  body.xrd-only aside {
+    display: none;
+  }
+  body.xrd-only main {
+    grid-column: 1 / -1;
+  }
+  body.xrd-only .module-panel {
+    display: none !important;
+  }
+  body.xrd-only #module-xrd {
+    display: flex !important;
+  }
+</style>
+<script>
+  // Injected by server at page load
+  window.mpKeySet = {{ mp_key_set | tojson }};
+  window.pymatgenReady = {{ pymatgen_ready | tojson }};
+</script>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+</head>
+<body class="xrd-only">
+<div class="app">
+
+  <!-- Header -->
+  <header>
+    <div class="logo">XRD<span>Toolkit</span></div>
+    <div class="badge">standalone XRD GUI</div>
+  </header>
+
+  <!-- Sidebar -->
+  <aside>
+    <div class="nav-section">Modules</div>
+    {% for m in modules %}
+    <div class="nav-item {% if m.id == 'gc' %}active{% endif %} {% if m.status == 'coming_soon' %}disabled{% endif %}"
+         data-module="{{ m.id }}"
+         onclick="switchModule('{{ m.id }}')">
+      <span>{{ m.icon }}</span>
+      <span>{{ m.name }}</span>
+      {% if m.status == 'coming_soon' %}<span class="soon">soon</span>{% endif %}
+    </div>
+    {% endfor %}
+
+    <div class="nav-section" style="margin-top:auto">Help</div>
+    <div class="nav-item" onclick="window.open('https://github.com/your-repo/catalysis-toolkit','_blank')">
+      <span>📖</span><span>Docs / GitHub</span>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main>
+
+    <!-- ── GC Module ── -->
+    <div class="module-panel" id="module-gc">
+
+      <!-- Step 1: Upload -->
+      <div class="card">
+        <div class="card-header">
+          <div class="step">1</div>
+          <h2>Upload GC Data File</h2>
+        </div>
+        <div class="card-body">
+          <div class="dropzone" id="dropzone" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+            <input type="file" id="fileInput" accept=".xlsx" onchange="onFileSelect(event)">
+            <div id="dropzone-content">
+              <div class="dropzone-icon">📂</div>
+              <div class="dropzone-text">Drag & drop your <span>.xlsx</span> file here</div>
+              <div class="dropzone-sub">or click to browse</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2: Reaction config -->
+      <div class="card">
+        <div class="card-header">
+          <div class="step">2</div>
+          <h2>Select Reaction Type</h2>
+        </div>
+        <div class="card-body">
+          <div class="config-grid" id="config-grid">
+            {% for cfg in reaction_configs %}
+            <div class="config-card {% if loop.first %}selected{% endif %}"
+                 data-file="{{ cfg.file }}"
+                 data-reactant="{{ cfg.reactant }}"
+                 data-inlets='{{ cfg.inlet_species | tojson }}'
+                 onclick="selectConfig(this)">
+              <div class="cfg-name">{{ cfg.name }}</div>
+              <div class="cfg-desc">{{ cfg.description }}</div>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3: Metadata + flows -->
+      <div class="card">
+        <div class="card-header">
+          <div class="step">3</div>
+          <h2>Experiment Details</h2>
+        </div>
+        <div class="card-body" style="display:flex; flex-direction:column; gap:20px;">
+
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Catalyst ID</label>
+              <input type="text" id="catalyst_id" placeholder="e.g. Fe@ZSM-5_350C_50mg">
+            </div>
+            <div class="form-group">
+              <label>Temperature</label>
+              <input type="text" id="temperature" placeholder="e.g. 350 C">
+            </div>
+            <div class="form-group">
+              <label>Pressure</label>
+              <input type="text" id="pressure" placeholder="e.g. 300 psig">
+            </div>
+            <div class="form-group">
+              <label>GHSV</label>
+              <input type="text" id="ghsv" placeholder="e.g. 12000 mL/g/h">
+            </div>
+            <div class="form-group full">
+              <label>Notes</label>
+              <textarea id="notes" placeholder="Any additional notes..."></textarea>
+            </div>
+          </div>
+
+          <!-- Inlet flows -->
+          <div>
+            <label style="display:block; margin-bottom:10px;">Inlet MFC Flows (sccm)</label>
+            <table class="flow-table" id="flow-table">
+              <thead>
+                <tr>
+                  <th>Species</th>
+                  <th>Flow (sccm)</th>
+                </tr>
+              </thead>
+              <tbody id="flow-tbody"></tbody>
+            </table>
+          </div>
+
+          <!-- Steady-state range -->
+          <div>
+            <label style="display:block; margin-bottom:8px;">Steady-State Injection Range</label>
+            <div class="ss-row">
+              <span>From injection</span>
+              <input type="number" id="ss_start" value="20" min="1" style="width:80px">
+              <span>to</span>
+              <input type="number" id="ss_end" value="999" min="1" style="width:80px">
+              <span style="font-size:11px; color:var(--muted);">(use a large end number to include all)</span>
+            </div>
+          </div>
+
+          <!-- Output directory -->
+          <div>
+            <label style="display:block; margin-bottom:8px;">Output Folder</label>
+            <div class="dir-row">
+              <input type="text" id="output_dir" placeholder="Leave blank to save next to this app (results/)">
+            </div>
+            <div style="font-size:11px; color:var(--muted); margin-top:5px;">
+              A timestamped subfolder will be created automatically for each run.
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Step 4: Process -->
+      <div class="card">
+        <div class="card-header">
+          <div class="step">4</div>
+          <h2>Process Data</h2>
+        </div>
+        <div class="card-body" style="display:flex; flex-direction:column; gap:16px;">
+          <button class="btn-process" id="btn-process" onclick="processGC()">
+            <span>⚗️</span> Process GC Data
+          </button>
+          <div class="progress-wrap" id="progress-wrap">
+            <div class="spinner"></div>
+            <div class="progress-text" id="progress-text">Reading file...</div>
+          </div>
+          <div class="error-box" id="error-box"></div>
+
+          <!-- Results -->
+          <div class="results-panel" id="results-panel">
+            <div class="results-header">
+              <h3>Results</h3>
+              <div id="bridge-pill"></div>
+              <div id="cb-pill"></div>
+            </div>
+
+            <div class="stats-grid" id="stats-grid"></div>
+
+            <div>
+              <label style="display:block; margin-bottom:10px;">Carbon Selectivities (Steady State)</label>
+              <div class="sel-grid" id="sel-grid"></div>
+            </div>
+
+            <div>
+              <img class="plot-img" id="result-plot" src="" alt="Results plot">
+            </div>
+
+            <div class="download-row" id="download-row"></div>
+          </div>
+        </div>
+      </div>
+    </div><!-- /gc module -->
+
+    <!-- ── Coming-soon modules ── -->
+    {% for m in modules %}
+    {% if m.status == 'coming_soon' and m.id != 'xrd' %}
+    <div class="module-panel" id="module-{{ m.id }}">
+      <div class="card">
+        <div class="coming-soon">
+          <div class="cs-icon">{{ m.icon }}</div>
+          <h2>{{ m.name }}</h2>
+          <p>This module is planned for a future release.</p>
+          <div class="cs-badge">Coming Soon</div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+    {% endfor %}
+    <!-- ── XRD Module ── -->
+    <div class="module-panel active" id="module-xrd">
+
+      <!-- Step 1: Upload + Settings row -->
+      <div style="display:grid;grid-template-columns:1.2fr 0.8fr;gap:16px;">
+
+        <div class="card">
+          <div class="card-header"><div class="step">1</div><h2>Upload XRD File</h2></div>
+          <div class="card-body" style="display:flex;flex-direction:column;gap:12px;">
+            <div class="dropzone" id="xrd-dropzone" ondragover="onDragOver2(event)" ondragleave="onDragLeave2(event)" ondrop="onDrop2(event)"
+                 style="padding:20px;min-height:90px;transition:all 0.35s ease;">
+              <input type="file" id="xrdFileInput" accept=".dat,.xy,.xye,.csv,.txt" onchange="onXrdFileSelect(event)">
+              <div id="xrd-dropzone-content" style="display:flex;flex-direction:column;align-items:center;gap:8px;justify-content:center;padding:10px 0;">
+                <span style="font-size:40px;">📊</span>
+                <div class="dropzone-text" style="font-size:14px;font-weight:600;">Drag &amp; drop XRD data file</div>
+                <div class="dropzone-sub">.dat · .xy · .xye · .csv · .txt · or click to browse</div>
+              </div>
+            </div>
+            <!-- Live preview plot — shown after file upload -->
+            <div id="xrd-preview-wrap" style="display:none;">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+                <span style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;">Data Preview</span>
+                <span id="xrd-preview-hint" style="font-size:10px;color:var(--muted);">Scroll to zoom · drag to pan · double-click to reset</span>
+              </div>
+              <div style="position:relative;">
+                <canvas id="xrd-preview-canvas"
+                        style="width:100%;height:280px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;cursor:crosshair;"
+                        onwheel="previewZoom(event)"
+                        onmousedown="previewPanStart(event)"
+                        onmousemove="previewPanMove(event)"
+                        onmouseup="previewPanEnd()"
+                        onmouseleave="previewPanEnd()"
+                        ondblclick="previewResetZoom()">
+                </canvas>
+                <div id="xrd-preview-overlay"
+                     style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+                            background:var(--surface2);border:1px solid var(--border);border-radius:6px;
+                            font-size:13px;color:var(--muted);pointer-events:none;">
+                  Loading preview…
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><div class="step">2</div><h2>Instrument Settings</h2></div>
+          <div class="card-body" style="display:flex;flex-direction:column;gap:12px;">
+            <div class="form-group">
+              <label>X-ray Source</label>
+              <select id="xrd-source" onchange="updateWavelength()">
+                <option value="1.54056">Cu Kα  (1.54056 Å)</option>
+                <option value="1.54439">Cu Kα2 (1.54439 Å)</option>
+                <option value="0.71073">Mo Kα  (0.71073 Å)</option>
+                <option value="1.78897">Co Kα  (1.78897 Å)</option>
+                <option value="1.93604">Fe Kα  (1.93604 Å)</option>
+                <option value="2.28970">Cr Kα  (2.28970 Å)</option>
+                <option value="custom">Custom...</option>
+              </select>
+            </div>
+            <div class="form-grid">
+              <div class="form-group">
+                <label>Wavelength (Å)</label>
+                <input type="number" id="xrd-wavelength" value="1.54056" step="0.00001">
+              </div>
+              <div class="form-group">
+                <label>Sample ID</label>
+                <input type="text" id="xrd-sample-id" placeholder="e.g. β-Mo₂C_350C">
+              </div>
+              <div class="form-group">
+                <label>2θ Min (°)</label>
+                <input type="number" id="xrd-tt-min" value="10" step="0.5">
+              </div>
+              <div class="form-group">
+                <label>2θ Max (°)</label>
+                <input type="number" id="xrd-tt-max" value="90" step="0.5">
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Output Folder</label>
+              <input type="text" id="xrd-output-dir" placeholder="Leave blank → results/ next to app">
+            </div>
+            <div class="form-group">
+              <label title="Auto mode analyzes your data to pick the right number of background terms. Override manually for samples with known amorphous backgrounds.">
+                Background terms
+                <span style="color:var(--muted);font-weight:400;"> — auto-selected by default</span>
+              </label>
+              <select id="xrd-bg-coeffs">
+                <option value="auto" selected>Auto — data-driven selection</option>
+                <option value="6">6 — clean baseline (recommended)</option>
+                <option value="8">8 — standard crystalline</option>
+                <option value="10">10 — moderate amorphous background</option>
+                <option value="14">14 — supported catalyst (SiO₂, Al₂O₃)</option>
+                <option value="20">20 — heavy amorphous background</option>
+              </select>
+            </div>
+            <div class="form-group" id="instprm-group" style="display:none;">
+              <label title="Upload a GSAS-II .instprm file from your instrument calibration. If not provided, default profile parameters will be used as starting guesses (U=2, V=−2, W=5) and refined during fitting.">
+                Instrument Parameters <span style="color:var(--muted);font-weight:400;"> — optional, GSAS-II only</span>
+              </label>
+              <input type="file" id="xrd-instprm-file" accept=".instprm,.prm,.inst"
+                     style="font-size:12px;">
+              <span style="font-size:11px;color:var(--muted);">
+                Upload your GSAS-II .instprm file for accurate profile parameters.
+                Without this, default values are used as initial guesses and refined.
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3: Phase Identification -->
+      <div class="card">
+        <div class="card-header">
+          <div class="step">3</div>
+          <h2>Phase Identification</h2>
+          <span style="margin-left:auto;font-size:11px;color:var(--muted);">Searches Materials Project</span>
+        </div>
+        <div class="card-body" style="display:flex;flex-direction:column;gap:14px;">
+
+          <!-- Search inputs -->
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto auto;gap:10px;align-items:flex-end;min-width:0;">
+            <div class="form-group">
+              <label>Elements (space-separated)</label>
+              <input type="text" id="xrd-elements" placeholder="e.g.  Mo  C"
+                     onkeydown="if(event.key==='Enter') searchPhases(false)">
+            </div>
+            <div class="form-group">
+              <label>Phase / keyword search</label>
+              <input type="text" id="xrd-phase-name" placeholder="e.g. molybdenum carbide"
+                     onkeydown="if(event.key==='Enter') searchPhases(false)">
+            </div>
+            <div class="form-group">
+              <label>Exact formula</label>
+              <input type="text" id="xrd-formula" placeholder="e.g. Mo2C"
+                     onkeydown="if(event.key==='Enter') searchPhases(false)">
+            </div>
+            <div class="form-group">
+              <label>Sort by</label>
+              <select id="xrd-sort">
+                <option value="formula">Formula</option>
+                <option value="spacegroup">Space group</option>
+                <option value="year_desc">Year (newest)</option>
+                <option value="year_asc">Year (oldest)</option>
+                <option value="cell_a">Cell a</option>
+              </select>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              <div style="display:flex;gap:6px;">
+                <button class="btn-sm" onclick="searchPhases(false)" title="Exact element search">🔍 Search</button>
+                <button class="btn-sm" onclick="searchPhases(true)" title="Allow extra elements">+ Loose</button>
+              </div>
+              <div style="display:flex;gap:6px;align-items:center;">
+                <!-- COD database currently returns no results; default to MP-only.
+                     Hidden radio inputs preserve form-state compatibility for any
+                     existing JS that reads xrd-source-db. -->
+                <input type="radio" name="xrd-source-db" value="mp" checked style="display:none;">
+                <span id="mp-key-badge"></span>
+              </div>
+            </div>
+          </div>
+
+          <div id="xrd-search-status" style="font-size:12px;font-family:var(--mono);color:var(--muted);min-height:16px;"></div>
+
+          <!-- Candidate list — scrollable -->
+          <div id="xrd-candidates-wrap" style="display:none;">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+              <label style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;">
+                Candidates <span id="xrd-count-badge" class="pill blue" style="margin-left:4px;"></span>
+                <span id="xrd-mp-badge" class="pill green" style="margin-left:4px;display:none;"></span>
+                <span id="xrd-cod-badge" class="pill yellow" style="margin-left:4px;display:none;"></span>
+              </label>
+              <input type="text" id="xrd-filter" placeholder="Filter results..."
+                     oninput="filterCandidates()"
+                     style="width:200px;font-size:12px;padding:4px 8px;">
+              <span style="font-size:11px;color:var(--muted);margin-left:auto;">Click a row to add to refinement</span>
+            </div>
+            <!-- Table header -->
+            <div style="display:grid;grid-template-columns:60px 1fr 90px 55px 70px 70px 70px 60px;gap:0;
+                        padding:5px 10px;background:var(--surface2);border:1px solid var(--border);
+                        border-radius:6px 6px 0 0;font-size:10px;font-weight:700;color:var(--muted);
+                        text-transform:uppercase;letter-spacing:.8px;">
+              <span>COD ID</span><span>Formula / Name</span><span>Space group</span>
+              <span>a (Å)</span><span>b (Å)</span><span>c (Å)</span><span>Year</span><span></span>
+            </div>
+            <div id="xrd-candidate-list"
+                 style="max-height:420px;overflow-y:auto;border:1px solid var(--border);
+                        border-top:none;border-radius:0 0 6px 6px;"></div>
+            <div id="xrd-load-more-wrap" style="display:none;margin-top:8px;">
+              <button class="btn-sm" onclick="loadMoreCOD()">Load 100 more results...</button>
+            </div>
+          </div>
+
+          <!-- Manual CIF upload -->
+          <div style="display:flex;align-items:center;gap:12px;">
+            <span style="font-size:12px;color:var(--muted);">or upload a CIF directly:</span>
+            <label class="btn-sm" style="cursor:pointer;">
+              📎 Upload .cif file
+              <input type="file" accept=".cif" onchange="uploadCIF(event)" style="display:none;">
+            </label>
+          </div>
+
+          <!-- Selected phases for refinement -->
+          <div id="xrd-selected-wrap" style="display:none;">
+            <label style="display:block;margin-bottom:8px;font-size:11px;font-weight:700;
+                          color:var(--muted);text-transform:uppercase;letter-spacing:.8px;">
+              Phases queued for refinement
+            </label>
+            <div id="xrd-selected-phases" style="display:flex;flex-direction:column;gap:6px;"></div>
+            <div style="margin-top:8px;font-size:11px;line-height:1.45;color:var(--muted);">
+              <b style="color:var(--text);">Phase-card guide:</b>
+              <b>Size</b> refines that phase's isotropic crystallite-size broadening.
+              <b>Mustrain</b> refines that phase's microstrain broadening.
+              <b>PO</b> controls March-Dollase preferred orientation: <b>off</b> disables it,
+              <b>fixed</b> applies the entered axis/value without refining, and <b>refined</b> lets the value vary.
+              <b>axis</b> is the preferred-orientation direction as h k l.
+              <b>value</b> is the March-Dollase ratio, where 1.0 means no texture. Fixed values should come from a validated prior or repeated comparison workflow.
+              <b>Uniform cell</b>, shown only for W2C-like phases, preserves starting axis ratios while keeping the refined volume.
+              It is off in the WC/W2C preset because it changes the fit and is meant for explicit diagnostic comparisons.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 4: Run -->
+      <div class="card">
+        <div class="card-header"><div class="step">4</div><h2>Run Refinement</h2></div>
+        <div class="card-body" style="display:flex;flex-direction:column;gap:14px;">
+
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <button class="btn-process" id="btn-xrd-gsas2" onclick="runXRD('gsas2')" style="background:linear-gradient(135deg,#8b5cf6,#6d28d9);display:none;" title="Requires GSAS-II installation">
+              <span>🔬</span> GSAS-II Refinement
+            </button>
+            <button class="btn-sm" onclick="resetXRD()" title="Clear everything and start fresh">↺ Reset</button>
+            <input type="checkbox" id="xrd-standard-recipe" style="display:none;">
+            <button type="button" class="btn-sm fit-guide-btn" onclick="openXrdFittingGuide()" title="Open a workflow guide for building and validating GSAS-II fits">Fitting Guide</button>
+            <button type="button" id="xrd-advanced-toggle" onclick="toggleXrdAdvanced()" style="display:none;margin-left:8px;font-size:11px;padding:2px 8px;background:var(--surface);color:var(--muted);border:1px solid var(--border);border-radius:4px;cursor:pointer;" title="Show / hide GSAS-II refinement controls">▶ GSAS controls</button>
+            <!-- Performance diagnostic preset is now superseded by the WC/W2C refinement preset; element hidden but kept in DOM for back-compat with cascade JS. -->
+            <label id="perf-recipe-label" style="display:none;">
+              <input type="checkbox" id="xrd-perf-recipe">
+            </label>
+            <select id="xrd-instrument" style="display:none;margin-left:8px;font-size:12px;padding:2px 6px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;" title="Select instrument for geometry, displacement model, and .instprm auto-loading">
+              <option value="auto">Instrument: Auto</option>
+              <option value="smartlab">Rigaku SmartLab (BB)</option>
+              <option value="synergy_s">Synergy-S (capillary)</option>
+            </select>
+          </div>
+          <div class="xrd-preset-row">
+            <span style="font-size:10px;color:var(--muted);font-weight:800;text-transform:uppercase;letter-spacing:.7px;">Presets</span>
+            <select id="xrd-preset-select" title="Load a saved refinement recipe"></select>
+            <button type="button" class="btn-sm" onclick="loadSelectedXrdPreset()" title="Apply the selected saved phases and GSAS controls">Load</button>
+            <button type="button" class="btn-sm green" onclick="saveCurrentXrdPreset()" title="Save the current phases, phase-card settings, GSAS controls, and last fit summary">Save current</button>
+            <button type="button" class="btn-sm" onclick="deleteSelectedXrdPreset()" title="Delete the selected preset">Delete</button>
+            <span id="xrd-preset-status" class="xrd-preset-status"></span>
+          </div>
+          <!-- Advanced settings row: hidden by default; toggled by the "▶ GSAS controls" button above. -->
+          <div id="xrd-advanced-row" style="display:none;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px;padding:8px;border:1px dashed var(--border);border-radius:6px;background:rgba(255,255,255,0.02);">
+            <span style="font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-right:4px;">GSAS-II controls:</span>
+            <label id="cal-mode-label" style="display:none;font-size:12px;color:var(--muted);cursor:pointer;" title="Calibration mode: refine instrument profile from a line standard (e.g. NIST Si 640g). Cell is fixed, U/V/W/X/Y/Zero/SH/L are refined sequentially.">
+              <input type="checkbox" id="xrd-calibration-mode" style="margin-right:4px;">
+              Calibration (instprm)
+            </label>
+            <label id="verify-mode-label" style="display:none;font-size:12px;color:var(--muted);cursor:pointer;" title="Quick constrained fit: refine background, phase scales, sample displacement/zero, and Y peak width only. Cell, atom positions, Uiso, and per-phase size stay fixed so bad CIFs or wrong peak positions are not hidden.">
+              <input type="checkbox" id="xrd-verification-mode" style="margin-right:4px;">
+              Quick constrained fit
+            </label>
+            <label id="verify-cell-label" style="display:none;margin-left:6px;font-size:12px;color:var(--muted);cursor:pointer;" title="With Quick constrained fit on, also let the unit-cell lengths refine in the final stage. Atom positions, Uiso, and per-phase size remain fixed.">
+              <input type="checkbox" id="xrd-verify-cell" style="margin-right:4px;">
+              Refine cell too
+            </label>
+            <label id="phase-iso-label" style="display:none;margin-left:6px;font-size:12px;color:var(--muted);cursor:pointer;" title="Phase isolation (default ON): per-phase curves and ticks come from GSAS-II's actual calculated pattern and RefList. When OFF, per-phase curves are reconstructed manually from the Python reflection list — guaranteed visual consistency but does not reflect GSAS-II's internal Fc².">
+              <input type="checkbox" id="xrd-phase-isolation" style="margin-right:4px;" checked>
+              Phase isolation
+            </label>
+            <label id="zero-not-disp-label" style="display:none;margin-left:6px;font-size:12px;color:var(--muted);cursor:pointer;" title="Swap position handle: refine Zero (overriding the measured instprm's Zero lock) and pin DisplaceX/Y at 0. Use when DisplaceY refuses to move from 0 because the position offset is really a Zero miscalibration that doesn't transfer from the Si standard to this sample. Diagnostic.">
+              <input type="checkbox" id="xrd-zero-not-disp" style="margin-right:4px;">
+              Refine Zero (fix Disp)
+            </label>
+            <label id="refine-x-label" style="display:none;margin-left:6px;font-size:12px;color:var(--muted);cursor:pointer;" title="Free X (Lorentzian strain). Tests strain-like broadening on top of size (Y).">
+              <input type="checkbox" id="xrd-refine-x" style="margin-right:4px;">
+              Free X
+            </label>
+            <label id="fix-y-label" style="display:none;margin-left:6px;font-size:12px;color:var(--muted);cursor:pointer;" title="Fix Y at the entered value (centideg). Empty value uses current instprm Y. Overrides any Y-refinement.">
+              <input type="checkbox" id="xrd-fix-y" style="margin-right:4px;">
+              Fix Y
+              <input type="number" id="xrd-fix-y-value" placeholder="centideg" step="0.01" style="margin-left:4px;width:80px;font-size:11px;padding:1px 4px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:3px;">
+            </label>
+            <label id="y-nonneg-label" style="display:none;margin-left:6px;font-size:12px;color:var(--muted);cursor:pointer;" title="Clamp refined Y to ≥ 0 after Stage 6. Negative Y is unphysical (Lorentzian width can't be negative) but the optimizer can drive Y < 0 when X and Y trade off.">
+              <input type="checkbox" id="xrd-y-nonneg" style="margin-right:4px;">
+              Y ≥ 0
+            </label>
+            <label id="refine-uiso-label" style="display:none;margin-left:6px;font-size:12px;color:var(--muted);cursor:pointer;" title="Refine Uiso (atomic displacement / Debye-Waller) in Stage 4. Use after profile is settled. Heavy-atom Uiso (W) is correlated with phase scale, so watch the χ² and weight-fraction stability.">
+              <input type="checkbox" id="xrd-refine-uiso" style="margin-right:4px;">
+              Refine Uiso
+            </label>
+            <!-- Per-phase HAP refinement (size / microstrain / PO) is now
+                 controlled in the per-phase cards under "Selected phases".
+                 The legacy phase-name-specific checkboxes (WC/W2C size,
+                 WC/W2C mustrain, "Refine size (all)") were removed because
+                 they did not generalize to other phase systems.  Use the
+                 dynamic phase cards instead. -->
+            <span id="refine-size-label" style="display:none;"></span>
+            <span id="refine-wc-size-label" style="display:none;"></span>
+            <span id="refine-w2c-size-label" style="display:none;"></span>
+            <span id="refine-wc-mustrain-label" style="display:none;"></span>
+            <span id="refine-w2c-mustrain-label" style="display:none;"></span>
+            <label id="refine-xyz-label" style="display:none;margin-left:6px;font-size:12px;color:var(--muted);cursor:pointer;" title="Refine atom positions (XYZ). Off by default — without a measured instprm and tight constraints, XYZ refinement absorbs errors from PO/Uiso/background.">
+              <input type="checkbox" id="xrd-refine-xyz" style="margin-right:4px;">
+              Refine XYZ
+            </label>
+            <div style="flex-basis:100%;font-size:11px;line-height:1.45;color:var(--muted);border-top:1px solid rgba(255,255,255,0.08);padding-top:7px;margin-top:2px;">
+              <b style="color:var(--text);">Control guide:</b>
+              <b>Quick constrained fit</b> refines only background, phase scales, sample position, and shared peak width.
+              <b>Refine cell too</b> adds unit-cell refinement while keeping atoms/Uiso/size fixed.
+              <b>Phase isolation</b> uses GSAS-II calculated phase curves for the plotted phase envelopes.
+              <b>Refine Zero</b> swaps the sample-displacement correction for a zero-shift correction.
+              <b>Free X</b> allows Lorentzian strain broadening.
+              <b>Fix Y</b> holds the Lorentzian size-width parameter at the entered centidegree value.
+              <b>Y ≥ 0</b> prevents unphysical negative size broadening.
+              <b>Refine Uiso</b> lets atomic displacement factors refine.
+              <b>Refine XYZ</b> lets atom coordinates refine and should usually stay off unless the structure is trusted and the data justify it.
+              <b>WC/W2C Synergy-S production preset</b> ticks Quick constrained fit, Refine cell too, Phase isolation, Refine Zero, Free X, and Y ≥ 0;
+              it sets WC PO to fixed [001] at 0.905 and leaves W2C uniform-cell scaling off unless you tick it in the W2C card.
+            </div>
+          </div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.45;">
+            <b style="color:var(--text);">GSAS-II refinement</b> fits the measured XRD pattern using the queued CIF structures,
+            shared instrument/profile terms, and per-phase scale/cell/HAP settings. CIF tick marks and phase envelopes are
+            display outputs from the same phase list used for refinement.
+          </div>
+
+          <div class="progress-wrap" id="xrd-progress-wrap">
+            <div class="spinner"></div>
+            <div class="progress-text" id="xrd-progress-text">Initialising...</div>
+          </div>
+
+          <!-- Error box — stays visible even after errors, doesn't require page refresh -->
+          <div class="error-box" id="xrd-error-box"></div>
+
+          <!-- Results panel — only hidden, not destroyed, so results persist -->
+          <div class="results-panel" id="xrd-results-panel">
+            <div class="results-header" style="flex-wrap:wrap;gap:8px;">
+              <h3>Refinement Results</h3>
+              <div id="xrd-stats-pills"></div>
+              <div id="xrd-pymatgen-pill"></div>
+            </div>
+            <div class="stats-grid" id="xrd-stats-grid"></div>
+            <div id="xrd-fit-warnings" class="fit-warning-panel"></div>
+            <div id="xrd-baseline-comparison"></div>
+            <div id="xrd-reusable-fit"></div>
+            <div id="xrd-phase-results"></div>
+            <div id="xrd-interactive-plot" style="display:none;width:100%;height:500px;border-radius:8px;border:1px solid var(--border);"></div>
+            <img class="plot-img" id="xrd-result-plot" src="" alt="XRD refinement plot"
+                 style="display:none;">
+            <div class="download-row" id="xrd-download-row"></div>
+          </div>
+
+        </div>
+      </div>
+
+    </div><!-- /xrd module -->
+
+  </main>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let selectedFile   = null;
+let selectedConfig = null;
+
+// ── Init: select first config ─────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  const first = document.querySelector('.config-card');
+  if (first) selectConfig(first);
+});
+
+// ── Module switching ──────────────────────────────────────────────────────
+function switchModule(id) {
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.module-panel').forEach(el => el.classList.remove('active'));
+  document.querySelector(`[data-module="${id}"]`).classList.add('active');
+  document.getElementById(`module-${id}`).classList.add('active');
+}
+
+// ── Drag-and-drop ─────────────────────────────────────────────────────────
+function onDragOver(e) { e.preventDefault(); document.getElementById('dropzone').classList.add('dragover'); }
+function onDragLeave()  { document.getElementById('dropzone').classList.remove('dragover'); }
+function onDrop(e) {
+  e.preventDefault();
+  document.getElementById('dropzone').classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file) setFile(file);
+}
+function onFileSelect(e) { if (e.target.files[0]) setFile(e.target.files[0]); }
+
+function setFile(file) {
+  if (!file.name.endsWith('.xlsx')) {
+    showError('Please select an .xlsx file.');
+    return;
+  }
+  selectedFile = file;
+  const dz = document.getElementById('dropzone');
+  dz.classList.add('has-file');
+  document.getElementById('dropzone-content').innerHTML = `
+    <div class="dropzone-icon">✅</div>
+    <div class="file-name">${file.name}</div>
+    <div class="dropzone-sub">${(file.size/1024).toFixed(1)} KB · click to change</div>
+  `;
+}
+
+// ── Reaction config selection ─────────────────────────────────────────────
+function selectConfig(el) {
+  document.querySelectorAll('.config-card').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  selectedConfig = el.dataset.file;
+
+  // Build inlet flows table
+  let inlets = [];
+  try { inlets = JSON.parse(el.dataset.inlets); } catch(e) {}
+  const tbody = document.getElementById('flow-tbody');
+  tbody.innerHTML = '';
+  inlets.forEach(sp => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><span class="species-label">${sp.label}</span></td>
+      <td><input type="number" step="0.1" min="0" value="${sp.default_sccm}"
+                 id="flow_${sp.label}" placeholder="sccm"></td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+// ── Process ───────────────────────────────────────────────────────────────
+async function processGC() {
+  hideError();
+  if (!selectedFile)   { showError('Please upload a .xlsx file first.'); return; }
+  if (!selectedConfig) { showError('Please select a reaction type.'); return; }
+
+  const catalystId = document.getElementById('catalyst_id').value.trim();
+  if (!catalystId)     { showError('Please enter a Catalyst ID.'); return; }
+
+  // Build inlet flows JSON
+  const inlets = {};
+  document.querySelectorAll('[id^="flow_"]').forEach(inp => {
+    const sp = inp.id.replace('flow_', '');
+    if (inp.value) inlets[sp] = inp.value;
+  });
+
+  const formData = new FormData();
+  formData.append('file',            selectedFile);
+  formData.append('reaction_config', selectedConfig);
+  formData.append('catalyst_id',     catalystId);
+  formData.append('temperature',     document.getElementById('temperature').value);
+  formData.append('pressure',        document.getElementById('pressure').value);
+  formData.append('ghsv',            document.getElementById('ghsv').value);
+  formData.append('notes',           document.getElementById('notes').value);
+  formData.append('inlet_flows',     JSON.stringify(inlets));
+  formData.append('ss_start',        document.getElementById('ss_start').value);
+  formData.append('ss_end',          document.getElementById('ss_end').value);
+  formData.append('output_dir',      document.getElementById('output_dir').value);
+
+  // Show progress
+  document.getElementById('btn-process').disabled = true;
+  showProgress('Reading and parsing GC file...');
+  document.getElementById('results-panel').classList.remove('visible');
+
+  const steps = [
+    'Calculating molar flows via Ar normalisation...',
+    'Computing conversion and selectivities...',
+    'Generating plots...',
+    'Saving outputs...',
+  ];
+  let si = 0;
+  const stepTimer = setInterval(() => {
+    si = (si + 1) % steps.length;
+    document.getElementById('progress-text').textContent = steps[si];
+  }, 1800);
+
+  try {
+    const resp = await fetch('/api/process_gc', { method: 'POST', body: formData });
+    const data = await resp.json();
+    clearInterval(stepTimer);
+
+    if (data.error) {
+      hideProgress();
+      showError(data.error + (data.trace ? '\n\n' + data.trace : ''));
+      document.getElementById('btn-process').disabled = false;
+      return;
+    }
+
+    hideProgress();
+    showResults(data);
+  } catch(e) {
+    clearInterval(stepTimer);
+    hideProgress();
+    showError('Unexpected error: ' + e.message);
+  }
+  document.getElementById('btn-process').disabled = false;
+}
+
+function showResults(data) {
+  const panel = document.getElementById('results-panel');
+  panel.classList.add('visible');
+
+  // Pills
+  document.getElementById('bridge-pill').innerHTML = data.fid_bridge
+    ? '<span class="pill blue">CH4 bridge ✓</span>'
+    : '<span class="pill yellow">Direct Ar norm.</span>';
+
+  const cb = data.carbon_balance;
+  if (cb !== undefined) {
+    const ok = cb >= 90 && cb <= 110;
+    document.getElementById('cb-pill').innerHTML =
+      `<span class="pill ${ok ? 'green' : 'yellow'}">C balance: ${cb}%</span>`;
+  }
+
+  // Stats
+  const statsEl = document.getElementById('stats-grid');
+  statsEl.innerHTML = '';
+  const stats = [
+    { label: 'Sequence',    val: data.sequence_name,  unit: '' },
+    { label: 'Bypass inj.', val: data.n_bypass,       unit: '' },
+    { label: 'Rxn inj.',    val: data.n_reaction,     unit: '' },
+    { label: 'SS inj.',     val: data.n_ss,            unit: '' },
+  ];
+  if (data.conversion !== undefined)
+    stats.push({ label: 'Conversion', val: data.conversion, unit: `± ${data.conversion_std}%` });
+  stats.forEach(s => {
+    statsEl.innerHTML += `
+      <div class="stat-box">
+        <div class="stat-label">${s.label}</div>
+        <div class="stat-val">${s.val}<span class="stat-unit"> ${s.unit}</span></div>
+      </div>`;
+  });
+
+  // Selectivities
+  const selEl = document.getElementById('sel-grid');
+  selEl.innerHTML = '';
+  const sels = data.selectivities || {};
+  Object.entries(sels).sort((a,b) => b[1]-a[1]).forEach(([sp, val]) => {
+    if (val > 0.05)
+      selEl.innerHTML += `
+        <div class="sel-item">
+          <div class="sel-sp">${sp}</div>
+          <div class="sel-val">${val.toFixed(1)}%</div>
+        </div>`;
+  });
+
+  // Plot
+  if (data.plot_b64) {
+    document.getElementById('result-plot').src = `data:image/png;base64,${data.plot_b64}`;
+  }
+
+  // Download buttons
+  const dlRow = document.getElementById('download-row');
+  dlRow.innerHTML = `
+    <button class="btn-sm green" onclick="openFolder('${escPath(data.output_dir)}')">📁 Open Output Folder</button>
+    <button class="btn-sm" onclick="downloadFile('${escPath(data.summary_path)}')">⬇ Summary Excel</button>
+    <button class="btn-sm" onclick="downloadFile('${escPath(data.flows_path)}')">⬇ Flow Data CSV</button>
+  `;
+
+  panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function openFolder(path) {
+  fetch('/api/open_folder?path=' + encodeURIComponent(path));
+}
+function downloadFile(path) {
+  window.location = '/api/download?path=' + encodeURIComponent(path);
+}
+function escPath(p) { return (p || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'"); }
+function escHtml(v) {
+  return String(v ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[ch]));
+}
+
+function openXrdFittingGuide() {
+  const guide = window.open('', 'xrdFittingGuide',
+    'width=980,height=760,menubar=no,toolbar=no,location=no,status=no,scrollbars=yes,resizable=yes');
+  if (!guide) {
+    alert('The fitting guide was blocked by the browser. Allow popups for this page and click Fitting Guide again.');
+    return;
+  }
+  guide.document.open();
+  guide.document.write(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>XRD Fitting Guide</title>
+<style>
+  :root {
+    --bg:#0d1117; --surface:#161b22; --surface2:#1c2128; --border:#2d333b;
+    --accent:#58a6ff; --good:#39d353; --warn:#e3b341; --danger:#f78166;
+    --text:#e6edf3; --muted:#8b949e; --mono:"JetBrains Mono", Consolas, monospace;
+  }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:Arial, sans-serif; line-height:1.55; }
+  main { max-width:920px; margin:0 auto; padding:28px; }
+  h1 { font-size:24px; margin:0 0 10px; }
+  h2 { font-size:15px; margin:24px 0 8px; color:var(--accent); }
+  p, li { font-size:14px; color:var(--text); }
+  .muted { color:var(--muted); }
+  .panel { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:16px 18px; margin:14px 0; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
+  .tag { display:inline-block; font-family:var(--mono); font-size:12px; border:1px solid var(--border); border-radius:16px; padding:2px 8px; color:var(--muted); margin:2px 4px 2px 0; }
+  code { font-family:var(--mono); background:var(--surface2); border:1px solid var(--border); border-radius:4px; padding:1px 4px; }
+  ol, ul { padding-left:22px; }
+  strong { color:#fff; }
+  .warn { border-color:rgba(227,179,65,.45); background:rgba(227,179,65,.08); }
+  .danger { border-color:rgba(247,129,102,.45); background:rgba(247,129,102,.08); }
+</style>
+</head>
+<body>
+<main>
+  <h1>XRD fitting workflow</h1>
+  <p class="muted">Use this widget to build a fit gradually. The goal is not the lowest Rwp by itself; the goal is the simplest physically defensible model that explains the measured pattern.</p>
+
+  <div class="panel">
+    <h2>Valid new-sample workflow</h2>
+    <ol>
+      <li><strong>Load data and phases.</strong> Import CIFs, then confirm the preview ticks land near real peaks before refinement.</li>
+      <li><strong>Start constrained.</strong> Use <code>Quick constrained fit</code> first. It refines background, phase scales, sample position, and shared width without changing the structure.</li>
+      <li><strong>Add cell only after tick alignment is credible.</strong> Turn on <code>Refine cell too</code> when peak positions are consistently shifted but the CIF identity looks right.</li>
+      <li><strong>Add one physical correction at a time.</strong> Preferred orientation, size, microstrain, Uiso, and XYZ can all improve statistics for the wrong reason. Enable them only when the residual pattern supports that mechanism.</li>
+      <li><strong>Check physical outputs.</strong> Weight fractions should be stable, cell shifts should be plausible, FWHM should be referenced to a real phase peak, and size/strain values should not just be compensating for bad structure or instrument settings.</li>
+      <li><strong>Mark a baseline.</strong> Once the constrained fit is physically plausible, click <code>Mark current as baseline</code> in the results panel.</li>
+      <li><strong>Record the reusable parameters.</strong> The results panel lists phase-card settings and fitted quantities worth carrying into the next run. Use saved presets for validated recipes.</li>
+    </ol>
+  </div>
+
+  <div class="panel">
+    <h2>Baseline comparison</h2>
+    <p>A baseline is a temporary reference fit for the current browser session. It does not save to disk and it does not change refinement settings.</p>
+    <ol>
+      <li>Run the simplest defensible fit: good CIF/tick alignment, plausible phase fractions, reasonable cell changes, and no unexplained warnings.</li>
+      <li>Click <code>Mark current as baseline</code>.</li>
+      <li>Add one new correction, such as PO, size, microstrain, Uiso, or XYZ.</li>
+      <li>Run again and compare Rwp, GoF, warnings, phase fractions, cell changes, and size/FWHM outputs against the baseline.</li>
+      <li>Keep the added correction only if the residual pattern improves for the expected physical reason and the fitted outputs remain plausible.</li>
+    </ol>
+    <p class="muted">For WC/W2C Synergy-S production, fixed WC [001] PO at 0.905 can be part of the baseline because it is already validated. For a new material system, do not assume a PO/size/strain correction until the comparison supports it.</p>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>Safer early parameters</h2>
+      <span class="tag">background</span>
+      <span class="tag">phase scale</span>
+      <span class="tag">zero/displacement</span>
+      <span class="tag">shared Y width</span>
+      <span class="tag">cell after verification</span>
+      <p>These parameters are usually reasonable during setup because they test intensity, position, and broadening without immediately changing atomic coordinates.</p>
+    </div>
+    <div class="panel warn">
+      <h2>High-leverage parameters</h2>
+      <span class="tag">preferred orientation</span>
+      <span class="tag">phase size</span>
+      <span class="tag">microstrain</span>
+      <span class="tag">Uiso</span>
+      <span class="tag">XYZ</span>
+      <p>These can be valid, but they can also hide wrong CIFs, wrong background, or bad instrument assumptions. Add them deliberately and compare against the previous fit.</p>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Phase-card controls</h2>
+    <ul>
+      <li><strong>Size:</strong> per-phase isotropic crystallite-size broadening. Use when one phase is visibly broader than another.</li>
+      <li><strong>Mustrain:</strong> per-phase microstrain broadening. Use when broadening increases in a strain-like way and size alone is not sufficient.</li>
+      <li><strong>PO:</strong> March-Dollase preferred orientation. <code>fixed</code> uses the entered value; <code>refined</code> lets GSAS-II vary it; <code>off</code> disables it. PO changes relative reflection intensities, so it can trade off with phase fraction.</li>
+      <li><strong>Axis/value:</strong> the orientation direction and March-Dollase ratio. A value of 1.0 means no preferred orientation. Fixed values should come from a prior validated refinement, repeated related samples, or independent texture evidence.</li>
+      <li><strong>Uniform cell:</strong> a diagnostic constraint for W2C-like phases. It changes the fit and should not be part of a general preset unless validated for that sample family.</li>
+    </ul>
+  </div>
+
+  <div class="panel">
+    <h2>Inferring preferred orientation</h2>
+    <p>Do not guess a PO value from the formula alone. Establish a baseline first, then set the suspected textured phase to <code>PO refined</code> along a physically plausible axis. If the residuals improve in the affected reflections, wt% remains stable, and the March-Dollase value repeats across related samples, save or fix that value in a preset.</p>
+    <p class="muted">The WC/W2C Synergy-S preset uses WC [001] PO = 0.905 because that value came from this comparison workflow and was then fixed to avoid PO/Uiso/scale correlation. It is a production prior for that recipe, not a universal WC constant.</p>
+  </div>
+
+  <div class="panel danger">
+    <h2>Warning signs</h2>
+    <ul>
+      <li>Rwp/GoF improves only slightly after adding a high-leverage parameter.</li>
+      <li>Weight fractions move a lot while residuals barely improve.</li>
+      <li>Cell contraction/expansion is large or inconsistent with chemistry.</li>
+      <li>Y is negative before clamping, or size comes only from a fallback estimate.</li>
+      <li>Uiso/XYZ/PO absorb errors that should have been caught by CIF validation or instrument calibration.</li>
+    </ul>
+  </div>
+</main>
+</body>
+</html>`);
+  guide.document.close();
+  guide.focus();
+}
+
+// ── UI helpers ────────────────────────────────────────────────────────────
+function showProgress(msg) {
+  document.getElementById('progress-text').textContent = msg;
+  document.getElementById('progress-wrap').classList.add('visible');
+}
+function hideProgress() { document.getElementById('progress-wrap').classList.remove('visible'); }
+function showError(msg) {
+  const el = document.getElementById('error-box');
+  el.textContent = msg; el.classList.add('visible');
+}
+function hideError() { document.getElementById('error-box').classList.remove('visible'); }
+
+
+
+// ── XRD Preview Plot ───────────────────────────────────────────────────────
+let _previewData  = null;   // {tt, intensity, y_max, tt_min, tt_max}
+let _previewView  = null;   // {xMin, xMax, yMin, yMax} — current viewport
+let _previewPan   = null;   // pan state
+let _stickPhases  = [];     // [{name, color, sticks:[{two_theta,rel_int,hkl}]}]
+
+const PHASE_COLORS = ['#f78166','#56d364','#e3b341','#bc8cff','#79c0ff','#ffa657'];
+let _phaseUidCounter = 1;
+
+function phaseKey(phase) {
+  return phase?._phase_uid || phase?.mp_id || phase?.cod_id || phase?.name || phase?.formula || '';
+}
+
+function firstAvailablePhaseColor(excludeKey = null) {
+  const used = new Set(
+    xrdPhases
+      .filter(p => phaseKey(p) !== excludeKey)
+      .map(p => p._plot_color)
+      .filter(Boolean)
+  );
+  return PHASE_COLORS.find(c => !used.has(c)) || PHASE_COLORS[xrdPhases.length % PHASE_COLORS.length];
+}
+
+function ensurePhaseVisuals(phase) {
+  if (!phase) return PHASE_COLORS[0];
+  const key = phaseKey(phase);
+  const existing = xrdPhases.find(p => p === phase || (key && phaseKey(p) === key));
+  const target = existing || phase;
+  if (!target._phase_uid) target._phase_uid = `phase-${_phaseUidCounter++}`;
+  if (!target._plot_color) target._plot_color = firstAvailablePhaseColor(target._phase_uid);
+  phase._phase_uid = target._phase_uid;
+  phase._plot_color = target._plot_color;
+  return target._plot_color;
+}
+
+async function loadXrdPreview(file) {
+  const wrap    = document.getElementById('xrd-preview-wrap');
+  const overlay = document.getElementById('xrd-preview-overlay');
+  const hint    = document.getElementById('xrd-preview-hint');
+
+  // Show wrapper immediately with loading state
+  wrap.style.display = 'block';
+  overlay.style.display = 'flex';
+  overlay.textContent   = 'Loading preview…';
+  overlay.style.color   = 'var(--muted)';
+  hint.textContent      = '';
+
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const resp = await fetch('/api/xrd/preview', {method:'POST', body:fd});
+    const data = await resp.json();
+    if (data.error) {
+      console.error('XRD preview error:', data.error);
+      overlay.textContent = 'Preview unavailable: ' + data.error;
+      overlay.style.color = '#f78166';
+      return;
+    }
+    _previewData = data;
+    _previewView = {
+      xMin: data.tt_min, xMax: data.tt_max,
+      yMin: 0,           yMax: data.y_max * 1.15,
+    };
+    // Hide overlay and show controls hint
+    overlay.style.display = 'none';
+    hint.textContent      = 'Scroll to zoom · drag to pan · double-click to reset';
+    // Delay draw until browser has reflowed (getBoundingClientRect returns 0 otherwise)
+    requestAnimationFrame(() => { requestAnimationFrame(() => { drawPreview(); }); });
+  } catch(e) {
+    console.error('XRD preview fetch failed:', e);
+    overlay.textContent = 'Could not load preview — check console for details.';
+    overlay.style.color = '#f78166';
+  }
+}
+
+function drawPreview() {
+  const canvas = document.getElementById('xrd-preview-canvas');
+  if (!canvas || !_previewData) return;
+
+  // Resize canvas to match CSS size (for sharp rendering)
+  const rect = canvas.getBoundingClientRect();
+  canvas.width  = rect.width  * window.devicePixelRatio;
+  canvas.height = rect.height * window.devicePixelRatio;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+  const W = rect.width, H = rect.height;
+  const PAD = {l:48, r:12, t:10, b:32};
+  const pw = W - PAD.l - PAD.r;
+  const ph = H - PAD.t - PAD.b;
+
+  const {xMin, xMax, yMin, yMax} = _previewView;
+  const xScale = x => PAD.l + (x - xMin) / (xMax - xMin) * pw;
+  const yScale = y => PAD.t + ph - (y - yMin) / (yMax - yMin) * ph;
+
+  // Background
+  ctx.fillStyle = getComputedStyle(document.documentElement)
+                    .getPropertyValue('--surface2').trim() || '#161b22';
+  ctx.fillRect(0, 0, W, H);
+
+  // Grid lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth   = 1;
+  const nGridX = 8, nGridY = 5;
+  for (let i = 0; i <= nGridX; i++) {
+    const x = PAD.l + i * pw / nGridX;
+    ctx.beginPath(); ctx.moveTo(x, PAD.t); ctx.lineTo(x, PAD.t+ph); ctx.stroke();
+  }
+  for (let i = 0; i <= nGridY; i++) {
+    const y = PAD.t + i * ph / nGridY;
+    ctx.beginPath(); ctx.moveTo(PAD.l, y); ctx.lineTo(PAD.l+pw, y); ctx.stroke();
+  }
+
+  // Axis labels
+  ctx.fillStyle  = 'rgba(125,133,144,0.9)';
+  ctx.font       = `${10 * window.devicePixelRatio / window.devicePixelRatio}px monospace`;
+  ctx.textAlign  = 'center';
+  for (let i = 0; i <= nGridX; i++) {
+    const val = xMin + i * (xMax - xMin) / nGridX;
+    ctx.fillText(val.toFixed(0) + '°', PAD.l + i * pw / nGridX, H - 8);
+  }
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= nGridY; i++) {
+    const val = yMax - i * (yMax - yMin) / nGridY;
+    ctx.fillText(val.toFixed(0), PAD.l - 4, PAD.t + i * ph / nGridY + 3);
+  }
+
+  // Data trace
+  const tt = _previewData.tt;
+  const iy = _previewData.intensity;
+  ctx.strokeStyle = '#58a6ff';
+  ctx.lineWidth   = 1.2;
+  ctx.beginPath();
+  let first = true;
+  for (let i = 0; i < tt.length; i++) {
+    if (tt[i] < xMin || tt[i] > xMax) continue;
+    const px = xScale(tt[i]);
+    const py = yScale(Math.min(iy[i], yMax));
+    first ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+    first = false;
+  }
+  ctx.stroke();
+
+  // Stick patterns per phase
+  for (const phase of _stickPhases) {
+    ctx.strokeStyle = phase.color;
+    ctx.lineWidth   = 1.5;
+    const maxH = ph * 0.25;  // ticks are 25% of plot height
+
+    for (const stick of phase.sticks) {
+      const tx = stick.two_theta;
+      if (tx < xMin || tx > xMax) continue;
+      const px  = xScale(tx);
+      const tickH = maxH * stick.rel_int;
+      const yBot  = PAD.t + ph;
+      const yTop  = yBot - tickH;
+
+      ctx.globalAlpha = 0.85;
+      ctx.beginPath();
+      ctx.moveTo(px, yBot);
+      ctx.lineTo(px, yTop);
+      ctx.stroke();
+
+      // Tick cap
+      ctx.beginPath();
+      ctx.arc(px, yTop, 2, 0, Math.PI * 2);
+      ctx.fillStyle = phase.color;
+      ctx.fill();
+      ctx.globalAlpha = 1.0;
+    }
+
+  }
+
+  // ── Fixed legend for stick phases (top-right corner) ──────────────
+  if (_stickPhases.length > 0) {
+    const legendX = PAD.l + pw - 6;
+    const legendY0 = PAD.t + 6;
+    const lineH = 14;
+    ctx.textAlign  = 'right';
+    ctx.font       = '10px sans-serif';
+    for (let pi = 0; pi < _stickPhases.length; pi++) {
+      const p = _stickPhases[pi];
+      const ly = legendY0 + pi * lineH;
+      // Small colored line
+      ctx.strokeStyle = p.color;
+      ctx.lineWidth   = 2;
+      ctx.globalAlpha = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(legendX - ctx.measureText(p.name).width - 14, ly);
+      ctx.lineTo(legendX - ctx.measureText(p.name).width - 4, ly);
+      ctx.stroke();
+      // Label
+      ctx.fillStyle   = p.color;
+      ctx.fillText(p.name, legendX, ly + 3);
+      ctx.globalAlpha = 1.0;
+    }
+  }
+
+  // Axis border
+  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+  ctx.lineWidth   = 1;
+  ctx.strokeRect(PAD.l, PAD.t, pw, ph);
+}
+
+function initPreviewFromSticks(sticks) {
+  const wrap    = document.getElementById('xrd-preview-wrap');
+  const overlay = document.getElementById('xrd-preview-overlay');
+  const hint    = document.getElementById('xrd-preview-hint');
+  const ttMinInput = parseFloat(document.getElementById('xrd-tt-min').value);
+  const ttMaxInput = parseFloat(document.getElementById('xrd-tt-max').value);
+  const xs = (sticks || []).map(s => parseFloat(s.two_theta)).filter(Number.isFinite);
+  const dataMin = xs.length ? Math.max(0, Math.min(...xs) - 5) : 5;
+  const dataMax = xs.length ? Math.min(120, Math.max(...xs) + 5) : 90;
+  const xMin = Number.isFinite(ttMinInput) ? ttMinInput : dataMin;
+  const xMax = Number.isFinite(ttMaxInput) ? ttMaxInput : dataMax;
+  _previewData = {
+    tt: [], intensity: [], y_max: 1,
+    tt_min: Math.min(xMin, xMax - 1),
+    tt_max: Math.max(xMax, xMin + 1),
+  };
+  _previewView = {
+    xMin: _previewData.tt_min, xMax: _previewData.tt_max,
+    yMin: 0,                  yMax: 1.15,
+  };
+  wrap.style.display = 'block';
+  overlay.style.display = 'none';
+  hint.textContent = 'CIF ticks shown; load XRD data to overlay the measured pattern';
+}
+
+function addStickPhase(phase) {
+  const wl     = parseFloat(document.getElementById('xrd-wavelength').value) || 1.54056;
+  const sticks = computeSticks(phase, wl);
+  const color = ensurePhaseVisuals(phase);
+  const phaseId = phaseKey(phase);
+  // Remove old entry for this phase if present
+  _stickPhases = _stickPhases.filter(p => p.phase_key !== phaseId);
+  // Build label: formula + space group (disambiguates same-formula phases)
+  let label = phase.name || phase.formula || phaseId;
+  const sg = phase.spacegroup || '';
+  if (sg && !label.includes(sg)) label += ' ' + sg;
+  _stickPhases.push({
+    name:   label,
+    phase_key: phaseId,
+    cod_id: phaseId,
+    color,
+    sticks: sticks,
+  });
+  if (!_previewData && sticks.length > 0) initPreviewFromSticks(sticks);
+  if (_previewData) drawPreview();
+}
+
+function removeStickPhase(cod_id) {
+  _stickPhases = _stickPhases.filter(p => p.phase_key !== cod_id && p.cod_id !== cod_id);
+  if (_previewData) drawPreview();
+}
+
+function computeSticks(phase, wavelength) {
+  // Priority 1: tick positions computed server-side after refinement
+  if (phase.tick_positions && phase.tick_positions.length > 0) {
+    return phase.tick_positions.map(tt => ({two_theta: tt, rel_int: 1.0, hkl: ''}));
+  }
+  // Priority 2: stick_pattern from COD search (already has rel_int)
+  if (phase.stick_pattern && phase.stick_pattern.length > 0) {
+    return phase.stick_pattern;
+  }
+  // Priority 3: compute from cell params client-side (simple cubic/hex/tetragonal)
+  const a = parseFloat(phase.a) || 4.0;
+  const c = parseFloat(phase.c) || a;
+  const sys = (phase.system || 'cubic').toLowerCase();
+  const sticks = [];
+  const ttMin = parseFloat(document.getElementById('xrd-tt-min').value) || 10;
+  const ttMax = parseFloat(document.getElementById('xrd-tt-max').value) || 90;
+
+  // Generate hkl up to order 6
+  for (let h = 0; h <= 6; h++) for (let k = 0; k <= 6; k++) for (let l = 0; l <= 6; l++) {
+    if (h+k+l === 0) continue;
+    let dInv2;
+    if (sys === 'cubic') {
+      dInv2 = (h*h + k*k + l*l) / (a*a);
+    } else if (sys === 'hexagonal' || sys === 'trigonal') {
+      dInv2 = (4/3) * (h*h + h*k + k*k) / (a*a) + (l*l)/(c*c);
+    } else if (sys === 'tetragonal') {
+      dInv2 = (h*h + k*k) / (a*a) + (l*l)/(c*c);
+    } else {
+      dInv2 = (h*h + k*k + l*l) / (a*a); // ortho/mono approx
+    }
+    if (dInv2 <= 0) continue;
+    const sinTheta = wavelength * Math.sqrt(dInv2) / 2;
+    if (sinTheta >= 1) continue;
+    const tt = 2 * (180/Math.PI) * Math.asin(sinTheta);
+    if (tt >= ttMin && tt <= ttMax) {
+      sticks.push({two_theta: parseFloat(tt.toFixed(3)), rel_int: 1.0,
+                   hkl: `(${h}${k}${l})`});
+    }
+  }
+  // Deduplicate and sort
+  const seen = new Set();
+  return sticks
+    .filter(s => { const k = s.two_theta.toFixed(2); if(seen.has(k)) return false; seen.add(k); return true; })
+    .sort((a,b) => a.two_theta - b.two_theta);
+}
+
+// ── Auto-scale Y to visible data range ─────────────────────────────────────
+function summarizeCifCheck(check) {
+  if (!check) return 'CIF check unavailable';
+  const bits = [];
+  if (check.parsed_sg) bits.push(`SG ${check.parsed_sg}`);
+  if (check.site_count !== null && check.site_count !== undefined) {
+    bits.push(`${check.site_count} site${check.site_count === 1 ? '' : 's'}`);
+  }
+  const msg = (check.messages || []).join(' ');
+  return `${bits.join(', ') || 'CIF parsed'}${msg ? ' - ' + msg : ''}`;
+}
+
+function showCifCheck(idx) {
+  const ph = xrdPhases[idx];
+  if (!ph) return;
+  const check = ph.cif_check || ph.validation || null;
+  const level = check && check.status === 'error' ? 'warn'
+              : check && check.status === 'warn' ? 'warn' : 'ok';
+  setXrdStatus(`${ph.formula || ph.name}: ${summarizeCifCheck(check)}`, level);
+}
+
+function autoScaleY() {
+  if (!_previewData || !_previewView) return;
+  const tt = _previewData.tt;
+  const iy = _previewData.intensity;
+  let yMax = 0;
+  for (let i = 0; i < tt.length; i++) {
+    if (tt[i] >= _previewView.xMin && tt[i] <= _previewView.xMax) {
+      if (iy[i] > yMax) yMax = iy[i];
+    }
+  }
+  _previewView.yMin = 0;
+  _previewView.yMax = Math.max(yMax * 1.15, 1);
+}
+
+// ── Zoom & Pan ──────────────────────────────────────────────────────────────
+function previewZoom(e) {
+  if (!_previewView) return;
+  e.preventDefault();
+  const canvas = e.currentTarget;
+  const rect   = canvas.getBoundingClientRect();
+  const mouseX = e.clientX - rect.left;
+  const PAD_L  = 48, pw = rect.width - PAD_L - 12;
+  const frac   = Math.max(0, Math.min(1, (mouseX - PAD_L) / pw));
+
+  const {xMin, xMax} = _previewView;
+  const range = xMax - xMin;
+  const factor = e.deltaY > 0 ? 1.15 : 0.87;
+  const newRange = Math.max(2, Math.min(range * factor, _previewData.tt_max - _previewData.tt_min));
+  const centre = xMin + frac * range;
+  _previewView.xMin = Math.max(_previewData.tt_min, centre - frac * newRange);
+  _previewView.xMax = Math.min(_previewData.tt_max, _previewView.xMin + newRange);
+  autoScaleY();
+  drawPreview();
+}
+
+function previewResetZoom() {
+  if (!_previewData) return;
+  _previewView = {
+    xMin: _previewData.tt_min, xMax: _previewData.tt_max,
+    yMin: 0,                   yMax: _previewData.y_max * 1.15,
+  };
+  drawPreview();
+}
+
+function previewPanStart(e) {
+  if (!_previewView) return;
+  _previewPan = {x: e.clientX, xMin: _previewView.xMin, xMax: _previewView.xMax};
+}
+function previewPanMove(e) {
+  if (!_previewPan || !_previewData) return;
+  const canvas = document.getElementById('xrd-preview-canvas');
+  const rect   = canvas.getBoundingClientRect();
+  const pw     = rect.width - 48 - 12;
+  const range  = _previewView.xMax - _previewView.xMin;
+  const dx     = (e.clientX - _previewPan.x) / pw * range;
+  let newMin   = _previewPan.xMin - dx;
+  let newMax   = _previewPan.xMax - dx;
+  if (newMin < _previewData.tt_min) { newMin = _previewData.tt_min; newMax = newMin + range; }
+  if (newMax > _previewData.tt_max) { newMax = _previewData.tt_max; newMin = newMax - range; }
+  _previewView.xMin = newMin;
+  _previewView.xMax = newMax;
+  autoScaleY();
+  drawPreview();
+}
+function previewPanEnd() { _previewPan = null; }
+
+// Redraw on window resize
+window.addEventListener('resize', () => { if (_previewData) drawPreview(); });
+
+// ── XRD Module ────────────────────────────────────────────────────────────
+let xrdFile       = null;
+let xrdCandidates = [];   // full result list from last search
+let xrdFiltered   = [];   // after client-side filter
+let xrdPhases     = [];   // phases queued for refinement
+let xrdSearchOffset = 0;  // for pagination
+let xrdPresets    = [];   // saved refinement recipes from project JSON
+let xrdLastResult = null; // most recent refinement result, for preset metadata
+let xrdLastFitSnapshot = null; // result + submitted settings at completion time
+let xrdBaselineFit = null; // session-only comparison reference
+let xrdActiveRecipeKey = null; // built-in recipe applied to current/next phases
+
+// Drag-and-drop
+function onDragOver2(e)  { e.preventDefault(); document.getElementById('xrd-dropzone').classList.add('dragover'); }
+function onDragLeave2()  { document.getElementById('xrd-dropzone').classList.remove('dragover'); }
+function onDrop2(e) {
+  e.preventDefault();
+  document.getElementById('xrd-dropzone').classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file) setXrdFile(file);
+}
+function onXrdFileSelect(e) { if (e.target.files[0]) setXrdFile(e.target.files[0]); }
+function setXrdFile(file) {
+  xrdFile = file;
+  const dz = document.getElementById('xrd-dropzone');
+  dz.classList.add('has-file');
+  // Shrink dropzone after file selected
+  const dz2 = document.getElementById('xrd-dropzone');
+  dz2.style.padding = '10px 16px';
+  dz2.style.minHeight = 'unset';
+  document.getElementById('xrd-dropzone-content').innerHTML =
+    `<div style="display:flex;align-items:center;gap:10px;justify-content:center;">
+       <span style="font-size:18px;">✅</span>
+       <div><div class="file-name" style="font-size:13px;">${file.name}</div>
+       <div class="dropzone-sub">${(file.size/1024).toFixed(1)} KB · click to change</div></div>
+     </div>`;
+  loadXrdPreview(file);
+}
+
+function updateWavelength() {
+  const val = document.getElementById('xrd-source').value;
+  if (val !== 'custom') document.getElementById('xrd-wavelength').value = val;
+}
+
+function updateSourceBadge() {
+  const src = document.querySelector('input[name="xrd-source-db"]:checked')?.value || 'both';
+  const badge = document.getElementById('mp-key-badge');
+  if (src === 'mp' || src === 'both') {
+    badge.innerHTML = window.mpKeySet
+      ? '<span class="pill green" style="font-size:10px;padding:2px 7px;">MP key ✓</span>'
+      : '<span class="pill yellow" style="font-size:10px;padding:2px 7px;" title="Add Materials Project API key to config.yaml">MP: no key</span>';
+  } else {
+    badge.innerHTML = '';
+  }
+}
+
+// Toggle the GSAS-II Advanced settings row (collapsed by default).
+// The contents are individually revealed when GSAS-II is available;
+// this function controls the wrapper visibility independently.
+function toggleXrdAdvanced() {
+  const row = document.getElementById('xrd-advanced-row');
+  const btn = document.getElementById('xrd-advanced-toggle');
+  if (!row || !btn) return;
+  const isHidden = (row.style.display === '' || row.style.display === 'none');
+  row.style.display = isHidden ? 'flex' : 'none';
+  btn.textContent = isHidden ? '▼ GSAS controls' : '▶ GSAS controls';
+}
+
+// Set initial badge state
+document.addEventListener('DOMContentLoaded', () => {
+  updateSourceBadge();
+  refreshXrdPresets();
+
+  // Check GSAS-II availability and show/hide button
+  fetch('/api/xrd/gsas2_status')
+    .then(r => r.json())
+    .then(data => {
+      if (data.available) {
+        const btn = document.getElementById('btn-xrd-gsas2');
+        if (btn) btn.style.display = '';
+        // Show instrument parameter file upload (GSAS-II only)
+        const instGrp = document.getElementById('instprm-group');
+        if (instGrp) instGrp.style.display = '';
+        // Show calibration mode checkbox and instrument selector
+        const calLabel = document.getElementById('cal-mode-label');
+        if (calLabel) calLabel.style.display = '';
+        const advBtn = document.getElementById('xrd-advanced-toggle');
+        if (advBtn) advBtn.style.display = '';
+        const verifyLabel = document.getElementById('verify-mode-label');
+        if (verifyLabel) verifyLabel.style.display = '';
+        const verifyCellLabel = document.getElementById('verify-cell-label');
+        if (verifyCellLabel) verifyCellLabel.style.display = '';
+        const phaseIsoLabel = document.getElementById('phase-iso-label');
+        if (phaseIsoLabel) phaseIsoLabel.style.display = '';
+        const zeroNotDispLabel = document.getElementById('zero-not-disp-label');
+        if (zeroNotDispLabel) zeroNotDispLabel.style.display = '';
+        const refineXLabel = document.getElementById('refine-x-label');
+        if (refineXLabel) refineXLabel.style.display = '';
+        const fixYLabel = document.getElementById('fix-y-label');
+        if (fixYLabel) fixYLabel.style.display = '';
+        const yNonnegLabel = document.getElementById('y-nonneg-label');
+        if (yNonnegLabel) yNonnegLabel.style.display = '';
+        const refineUisoLabel = document.getElementById('refine-uiso-label');
+        if (refineUisoLabel) refineUisoLabel.style.display = '';
+        const refineSizeLabel = document.getElementById('refine-size-label');
+        if (refineSizeLabel) refineSizeLabel.style.display = '';
+        const wcSizeLabel = document.getElementById('refine-wc-size-label');
+        if (wcSizeLabel) wcSizeLabel.style.display = '';
+        const w2cSizeLabel = document.getElementById('refine-w2c-size-label');
+        if (w2cSizeLabel) w2cSizeLabel.style.display = '';
+        const wcMustLabel = document.getElementById('refine-wc-mustrain-label');
+        if (wcMustLabel) wcMustLabel.style.display = '';
+        const w2cMustLabel = document.getElementById('refine-w2c-mustrain-label');
+        if (w2cMustLabel) w2cMustLabel.style.display = '';
+        const refineXyzLabel = document.getElementById('refine-xyz-label');
+        if (refineXyzLabel) refineXyzLabel.style.display = '';
+        // perf-recipe-label retired; do NOT un-hide.
+        const instSel = document.getElementById('xrd-instrument');
+        if (instSel) instSel.style.display = '';
+
+        // Built-in WC/W2C now lives in the preset dropdown. Keep the
+        // old hidden checkbox only for compatibility with stale state.
+        const stdRecipe = document.getElementById('xrd-standard-recipe');
+        if (stdRecipe && !stdRecipe._wired) {
+          stdRecipe._wired = true;
+          WCW2C_RECIPE_MEMBERS.forEach(id => {
+            const el = document.getElementById(id);
+            if (el && !el._memberWired) {
+              el._memberWired = true;
+              el.addEventListener('change', () => {
+                xrdActiveRecipeKey = null;
+                stdRecipe.checked = false;
+              });
+            }
+          });
+        }
+      }
+    })
+    .catch(() => {});  // silently ignore if endpoint not available
+});
+
+// ── COD Search ─────────────────────────────────────────────────────────────
+async function searchPhases(allowExtra = false) {
+  const elements = document.getElementById('xrd-elements').value.trim().split(/\s+/).filter(Boolean);
+  const name     = document.getElementById('xrd-phase-name').value.trim();
+  const formula  = document.getElementById('xrd-formula').value.trim();
+  const sort_by  = document.getElementById('xrd-sort').value;
+  const wl       = parseFloat(document.getElementById('xrd-wavelength').value);
+
+  if (!elements.length && !name && !formula) {
+    setXrdStatus('⚠ Enter elements, a keyword, or a formula first.', 'warn');
+    return;
+  }
+
+  setXrdStatus('🔍 Querying Materials Project...', 'info');
+  document.getElementById('xrd-candidates-wrap').style.display = 'none';
+  xrdSearchOffset = 0;
+
+  const source = document.querySelector('input[name="xrd-source-db"]:checked')?.value || 'both';
+
+  try {
+    const resp = await fetch('/api/xrd/search', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        elements, name, formula,
+        sort_by, strict: !allowExtra,
+        limit: 100, wavelength: wl, source
+      })
+    });
+    const data = await resp.json();
+    if (data.error) { setXrdStatus('✗ ' + data.error, 'error'); return; }
+
+    xrdCandidates = data.results || [];
+    xrdFiltered   = [...xrdCandidates];
+
+    const n   = xrdCandidates.length;
+    const nmp = data.mp_count  || 0;
+    const nco = data.cod_count || 0;
+
+    let statusMsg = `Found ${n} candidate${n!==1?'s':''}.`;
+    if (n === 100) statusMsg += ' (showing first 100 — try a more specific search)';
+    setXrdStatus(statusMsg, 'ok');
+
+    document.getElementById('xrd-count-badge').textContent = n;
+    // Source breakdown badges
+    const mpBadge  = document.getElementById('xrd-mp-badge');
+    const codBadge = document.getElementById('xrd-cod-badge');
+    if (nmp > 0) { mpBadge.textContent  = `${nmp} MP`;  mpBadge.style.display  = 'inline-flex'; }
+    else           mpBadge.style.display  = 'none';
+    if (nco > 0) { codBadge.textContent = `${nco} COD`; codBadge.style.display = 'inline-flex'; }
+    else           codBadge.style.display = 'none';
+
+    document.getElementById('xrd-filter').value = '';
+    renderCandidates();
+
+  } catch(e) {
+    setXrdStatus('✗ Network error: ' + e.message, 'error');
+  }
+}
+
+async function loadMoreCOD() {
+  xrdSearchOffset += 100;
+  const elements = document.getElementById('xrd-elements').value.trim().split(/\s+/).filter(Boolean);
+  const name     = document.getElementById('xrd-phase-name').value.trim();
+  const formula  = document.getElementById('xrd-formula').value.trim();
+  const sort_by  = document.getElementById('xrd-sort').value;
+  const wl       = parseFloat(document.getElementById('xrd-wavelength').value);
+
+  setXrdStatus('🔍 Loading more results...', 'info');
+  try {
+    const resp = await fetch('/api/xrd/search', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({elements, name, formula, sort_by, strict:false,
+                            limit:100, wavelength:wl, offset:xrdSearchOffset})
+    });
+    const data = await resp.json();
+    if (data.error) { setXrdStatus('✗ '+data.error,'error'); return; }
+    const more = data.results||[];
+    xrdCandidates = [...xrdCandidates, ...more];
+    xrdFiltered   = [...xrdCandidates];
+    document.getElementById('xrd-count-badge').textContent = xrdCandidates.length;
+    document.getElementById('xrd-filter').value = '';
+    setXrdStatus(`Showing ${xrdCandidates.length} results total.`,'ok');
+    renderCandidates();
+  } catch(e) { setXrdStatus('✗ '+e.message,'error'); }
+}
+
+function filterCandidates() {
+  const q = document.getElementById('xrd-filter').value.toLowerCase();
+  xrdFiltered = q
+    ? xrdCandidates.filter(c =>
+        (c.formula||'').toLowerCase().includes(q) ||
+        (c.name||'').toLowerCase().includes(q) ||
+        (c.spacegroup||'').toLowerCase().includes(q) ||
+        (c.cod_id||'').includes(q) ||
+        (c.mineral||'').toLowerCase().includes(q))
+    : [...xrdCandidates];
+  renderCandidates();
+}
+
+function renderCandidates() {
+  const wrap = document.getElementById('xrd-candidates-wrap');
+  const list = document.getElementById('xrd-candidate-list');
+  wrap.style.display = 'block';
+  list.innerHTML = '';
+
+  const alreadyAdded = new Set(xrdPhases.map(p => p.cod_id));
+  const BG='#161b22'; GRID='#2d333b'; TEXT='#e6edf3'; MUT='#7d8590'; ACC='#58a6ff';
+
+  xrdFiltered.forEach((c, i) => {
+    const added = alreadyAdded.has(c.cod_id);
+    const row = document.createElement('div');
+    row.style.cssText = `display:grid;grid-template-columns:60px 1fr 90px 55px 70px 70px 70px 60px;
+      gap:0;padding:7px 10px;border-bottom:1px solid ${GRID};cursor:pointer;
+      background:${added ? 'rgba(57,211,83,0.06)' : BG};
+      transition:background 0.1s;font-size:12px;`;
+    row.onmouseover = () => { if(!added) row.style.background='rgba(88,166,255,0.07)'; };
+    row.onmouseout  = () => { row.style.background = added?'rgba(57,211,83,0.06)':BG; };
+
+    const fmt   = (v,d=3) => v!=null ? parseFloat(v).toFixed(d) : '—';
+    const nameStr = (c.mineral||c.name||c.formula||'').slice(0,35);
+    const srcBadge = c.source === 'mp'
+      ? `<span style="font-size:9px;background:rgba(57,211,83,.15);color:#39d353;
+              border:1px solid #39d353;border-radius:3px;padding:0 4px;margin-left:4px;">MP</span>`
+      : `<span style="font-size:9px;background:rgba(88,166,255,.15);color:#58a6ff;
+              border:1px solid #58a6ff;border-radius:3px;padding:0 4px;margin-left:4px;">COD</span>`;
+    const fmtStr  = c.formula ? `<span style="color:${ACC};font-family:var(--mono)">${c.formula}</span>${srcBadge}` : '';
+    const stabStr = c.stability ? `<span style="color:${MUT};font-size:9px;">${c.stability}</span>` : '';
+
+    row.innerHTML = `
+      <span style="color:${MUT};font-family:var(--mono);font-size:11px;">${c.cod_id||c.mp_id||''}</span>
+      <span style="display:flex;flex-direction:column;gap:1px;">${fmtStr}
+        <span style="color:${MUT};font-size:10px;">${nameStr}</span>
+        ${stabStr}</span>
+      <span style="color:${MUT};font-size:11px;">${(c.spacegroup||'').slice(0,12)}</span>
+      <span style="font-family:var(--mono);font-size:11px;">${fmt(c.a)}</span>
+      <span style="font-family:var(--mono);font-size:11px;">${fmt(c.b)}</span>
+      <span style="font-family:var(--mono);font-size:11px;">${fmt(c.c)}</span>
+      <span style="color:${MUT};font-size:11px;">${c.year||''}</span>
+      <span>${added
+        ? '<span style="color:#39d353;font-size:11px;">✓ added</span>'
+        : `<button class="btn-sm" style="padding:2px 8px;font-size:10px;"
+             onclick="addPhaseFromRow(${i},event)">+ Add</button>`
+      }</span>`;
+
+    list.appendChild(row);
+  });
+
+  // Show load more if we hit the 100 limit
+  const lmw = document.getElementById('xrd-load-more-wrap');
+  lmw.style.display = xrdCandidates.length >= 100 ? 'block' : 'none';
+}
+
+async function addPhaseFromRow(idx, e) {
+  if (e) e.stopPropagation();
+  const c = xrdFiltered[idx];
+  if (!c || xrdPhases.find(p => p.cod_id === c.cod_id)) return;
+
+  // Fetch full CIF so the server can use pymatgen for structure factors
+  const entryId  = c.mp_id || c.cod_id;
+  const entrySrc = c.source || 'cod';
+  setXrdStatus(`📥 Fetching CIF for ${c.formula} [${entryId}] from ${entrySrc.toUpperCase()}...`, 'info');
+  try {
+    const resp = await fetch('/api/xrd/fetch_cif', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        cod_id: entryId, source: entrySrc,
+        wavelength: parseFloat(document.getElementById('xrd-wavelength').value)||1.54056,
+        phase_hint: {
+          formula: c.formula, name: c.name,
+          spacegroup: c.spacegroup, spacegroup_number: c.spacegroup_number,
+          system: c.system,
+          a: c.a, b: c.b, c: c.c,
+          alpha: c.alpha, beta: c.beta, gamma: c.gamma,
+        }
+      })
+    });
+    const data = await resp.json();
+    if (data.error) {
+      // Still add the phase — just without pymatgen seeding
+      setXrdStatus(`⚠ CIF fetch failed: ${data.error} — using fallback seeding.`, 'warn');
+      xrdPhases.push({...c});
+      addStickPhase({...c});
+    } else {
+      // Merge any better cell params from parsed CIF
+      xrdPhases.push({...c, ...data, cod_id: c.cod_id, name: c.name||c.formula});
+      setXrdStatus(`✓ Added ${c.formula} (CIF loaded, structure factors available).`, 'ok');
+      addStickPhase({...c, ...data, cod_id: c.cod_id, name: c.name||c.formula});
+      const check = data.cif_check || data.validation || null;
+      if (check) {
+        const statusLevel = check.status === 'error' ? 'warn'
+                          : check.status === 'warn' ? 'warn' : 'ok';
+        setXrdStatus(`Added ${c.formula}. ${summarizeCifCheck(check)}`, statusLevel);
+      }
+    }
+  } catch(_) {
+    xrdPhases.push({...c});
+    addStickPhase({...c});
+    setXrdStatus(`⚠ Network error — added ${c.formula} without CIF.`, 'warn');
+  }
+
+  renderCandidates();
+  renderSelectedPhases();
+}
+
+async function uploadCIF(e) {
+  const file = e.target.files[0]; if (!file) return;
+  const text = await file.text();
+  const getVal = (key) => {
+    const m = text.match(new RegExp(key + '\\s+([\\d\\.\\(\\)]+)'));
+    return m ? parseFloat(m[1]) : null;
+  };
+  const sgm = text.match(/_symmetry_Int_Tables_number\s+(\d+)/)
+           || text.match(/_space_group_IT_number\s+(\d+)/);
+  const sg  = sgm ? parseInt(sgm[1]) : 1;
+  // Also extract H-M symbol for display
+  const sgHM = text.match(/_symmetry_space_group_name_H-M\s+['"](.*?)['"]/)
+            || text.match(/_space_group_name_H-M_alt\s+['"](.*?)['"]/);
+  const spacegroup = sgHM ? sgHM[1].trim() : '';
+  const fm  = text.match(/_chemical_formula_sum\s+['"](.*?)['"]/);
+  const formula = fm ? fm[1].trim() : file.name.replace('.cif','');
+
+  const phase = {
+    name:              file.name.replace('.cif',''),
+    formula,
+    a: getVal('_cell_length_a') || 4.0,
+    b: getVal('_cell_length_b'),
+    c: getVal('_cell_length_c'),
+    alpha: getVal('_cell_angle_alpha') || 90.0,
+    beta:  getVal('_cell_angle_beta')  || 90.0,
+    gamma: getVal('_cell_angle_gamma') || 90.0,
+    spacegroup_number: sg,
+    spacegroup,
+    cod_id: 'manual',
+    cif_text: text,
+    cif_check: {
+      status: 'ok',
+      ok: true,
+      parsed_sg: sg,
+      expected_sg: sg,
+      site_count: null,
+      messages: ['Manual CIF loaded in browser; GSAS-II will refine this exact CIF text.'],
+    },
+  };
+  xrdPhases.push(phase);
+  addStickPhase(phase);
+  renderSelectedPhases();
+  setXrdStatus(`✓ Added ${formula} from uploaded CIF.`, 'ok');
+}
+
+function removePhase(idx) {
+  const removed = xrdPhases[idx];
+  if (removed) removeStickPhase(phaseKey(removed));
+  xrdPhases.splice(idx, 1);
+  xrdPhaseOptions.splice(idx, 1);
+  renderSelectedPhases();
+  renderCandidates();
+}
+
+// ─ Per-phase refinement options (dynamic; replaces hard-coded WC/W2C
+// checkboxes).  Each phase index in xrdPhases gets a corresponding
+// entry here.  Defaults are conservative (everything off, PO mode off).
+// Recipe presets and per-phase UI cards both write to this.
+let xrdPhaseOptions = [];
+
+const WCW2C_RECIPE_MEMBERS = [
+  'xrd-verification-mode',
+  'xrd-verify-cell',
+  'xrd-phase-isolation',
+  'xrd-zero-not-disp',
+  'xrd-refine-x',
+  'xrd-y-nonneg',
+];
+
+function isW2CPhase(ph) {
+  const formula = (ph?.formula || ph?.name || '').toLowerCase().replace(/\s/g, '');
+  return formula.includes('w2c') || formula === 'cw2' || formula.includes('c1w2');
+}
+
+function isWCPhase(ph) {
+  const formula = (ph?.formula || ph?.name || '').toLowerCase().replace(/\s/g, '');
+  return !isW2CPhase(ph) && (
+    formula === 'wc' || formula === 'cw' ||
+    formula.includes('w1c1') || formula.includes('c1w1')
+  );
+}
+
+function applyWcW2cPresetGlobals(enabled) {
+  WCW2C_RECIPE_MEMBERS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.checked = !!enabled;
+  });
+}
+
+function _defaultPhaseOptions(ph) {
+  // Suggest sensible PO axis defaults based on crystal system.  These
+  // are EDITABLE placeholders — the user can override.
+  const sys_ = (ph.system || '').toLowerCase();
+  let axisDefault = '';
+  if (sys_ === 'hexagonal' || sys_ === 'trigonal' || sys_ === 'tetragonal') {
+    axisDefault = '0 0 1';
+  } else if (sys_ === 'cubic') {
+    axisDefault = '1 1 1';
+  } else {
+    axisDefault = '';
+  }
+  return {
+    refine_size: false,
+    refine_mustrain: false,
+    po_mode: 'off',          // 'off' | 'fixed' | 'refined'
+    po_value: 1.0,
+    po_axis: axisDefault,    // string "h k l" in UI; parsed to [int,int,int] on submit
+    uniform_cell: false,
+  };
+}
+
+function _ensurePhaseOptions() {
+  // Pad / truncate xrdPhaseOptions to match xrdPhases length, preserving
+  // existing entries by index.
+  while (xrdPhaseOptions.length < xrdPhases.length) {
+    xrdPhaseOptions.push(_defaultPhaseOptions(
+      xrdPhases[xrdPhaseOptions.length]));
+  }
+  if (xrdPhaseOptions.length > xrdPhases.length) {
+    xrdPhaseOptions.length = xrdPhases.length;
+  }
+}
+
+function _phaseOptsToBackendJSON() {
+  // Convert UI-friendly entries to backend phase_options structure.
+  return xrdPhaseOptions.map(o => {
+    let axis = null;
+    if (o.po_axis && typeof o.po_axis === 'string') {
+      const parts = o.po_axis.trim().split(/[\s,]+/).map(x => parseInt(x, 10));
+      if (parts.length === 3 && parts.every(n => !isNaN(n))) axis = parts;
+    } else if (Array.isArray(o.po_axis)) {
+      axis = o.po_axis;
+    }
+    return {
+      refine_size: !!o.refine_size,
+      refine_mustrain: !!o.refine_mustrain,
+      po_mode: o.po_mode || 'off',
+      po_value: parseFloat(o.po_value || 1.0),
+      po_axis: axis,
+      uniform_cell: !!o.uniform_cell,
+    };
+  });
+}
+
+function applyWcW2cPresetPhaseOptions() {
+  _ensurePhaseOptions();
+  xrdPhases.forEach((ph, i) => {
+    const isW2C = isW2CPhase(ph);
+    const isWC = isWCPhase(ph);
+    if (isWC) {
+      xrdPhaseOptions[i].po_mode = 'fixed';
+      xrdPhaseOptions[i].po_axis = '0 0 1';
+      xrdPhaseOptions[i].po_value = 0.905;
+      xrdPhaseOptions[i].uniform_cell = false;
+    } else if (isW2C) {
+      xrdPhaseOptions[i].po_mode = 'off';
+      xrdPhaseOptions[i].uniform_cell = false;
+    }
+    xrdPhaseOptions[i].refine_size = false;
+    xrdPhaseOptions[i].refine_mustrain = false;
+  });
+}
+
+function renderSelectedPhases() {
+  _ensurePhaseOptions();
+  const stdRecipe = document.getElementById('xrd-standard-recipe');
+  if ((stdRecipe && stdRecipe.checked) || xrdActiveRecipeKey === 'wc_w2c_synergy_s') {
+    applyWcW2cPresetPhaseOptions();
+  }
+  const wrap = document.getElementById('xrd-selected-wrap');
+  const cont = document.getElementById('xrd-selected-phases');
+  wrap.style.display = xrdPhases.length ? 'block' : 'none';
+  cont.innerHTML = '';
+  xrdPhases.forEach((ph, i) => {
+    const c = ensurePhaseVisuals(ph);
+    const opts = xrdPhaseOptions[i];
+    const isW2C = isW2CPhase(ph);
+
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = `display:flex;flex-direction:column;gap:0;
+      background:var(--surface2);border:1px solid ${c};border-radius:6px;
+      overflow:hidden;`;
+
+    // Header row: phase identity (existing layout)
+    const head = document.createElement('div');
+    head.style.cssText = `display:flex;align-items:center;gap:10px;padding:8px 14px;`;
+    const zVal = ph.Z || '';
+    const cifCheck = ph.cif_check || ph.validation || null;
+    const hasCif = !!(ph.cif_text || ph.cache_key || cifCheck);
+    const cifStatus = cifCheck ? (cifCheck.status || (cifCheck.ok ? 'ok' : 'error')) : (hasCif ? 'ok' : '');
+    const cifColor = cifStatus === 'error' ? 'red' : (cifStatus === 'warn' ? 'yellow' : 'green');
+    const cifText = cifStatus === 'warn' ? 'CIF check' : (cifStatus === 'error' ? 'CIF issue' : 'CIF ok');
+    const cifSummary = summarizeCifCheck(cifCheck).replace(/"/g, '&quot;');
+    const cifBadge = hasCif
+      ? `<button class="pill ${cifColor}" style="font-size:10px;padding:2px 8px;border:0;cursor:pointer;" onclick="showCifCheck(${i})" title="${cifSummary}">${cifText}</button>`
+      : '';
+    head.innerHTML = `
+      <span style="width:10px;height:10px;border-radius:50%;background:${c};flex-shrink:0;"></span>
+      <span style="font-family:var(--mono);font-size:13px;font-weight:700;">${ph.formula||ph.name}</span>
+      <span style="font-size:11px;color:var(--muted);">${ph.spacegroup||''}</span>
+      <span style="font-size:11px;color:var(--muted);font-family:var(--mono);">
+        a=${parseFloat(ph.a||0).toFixed(3)} c=${parseFloat(ph.c||0).toFixed(3)} Å
+      </span>
+      ${cifBadge}
+      <label style="font-size:10px;color:var(--muted);display:flex;align-items:center;gap:4px;" title="Formula units per unit cell (Z) — needed for accurate weight fractions via Hill & Howard method">
+        Z=<input type="number" min="1" max="200" value="${zVal}" placeholder="?" style="width:40px;font-size:11px;padding:1px 4px;background:var(--surface);border:1px solid var(--border);color:var(--fg);border-radius:3px;"
+          onchange="xrdPhases[${i}].Z=parseInt(this.value)||null">
+      </label>
+      <span style="margin-left:auto;font-size:11px;color:var(--muted);">${ph.mp_id||ph.cod_id||''}</span>
+      <button class="btn-sm" style="padding:3px 8px;font-size:11px;" onclick="removePhase(${i})">✕</button>`;
+    wrapper.appendChild(head);
+
+    // Per-phase refinement controls row
+    const ctrl = document.createElement('div');
+    ctrl.style.cssText = `display:flex;flex-wrap:wrap;align-items:center;gap:10px;
+      padding:6px 14px 8px;border-top:1px solid var(--border);
+      font-size:11px;color:var(--muted);background:rgba(255,255,255,0.02);`;
+    const sysLabel = (ph.system || 'unknown').toLowerCase();
+    ctrl.innerHTML = `
+      <span style="font-weight:700;text-transform:uppercase;letter-spacing:.6px;font-size:10px;">Refine ${ph.formula||ph.name}:</span>
+      <label style="display:flex;align-items:center;gap:3px;cursor:pointer;" title="Refine isotropic crystallite size for this phase only">
+        <input type="checkbox" data-pi="${i}" data-key="refine_size" ${opts.refine_size?'checked':''}> Size
+      </label>
+      <label style="display:flex;align-items:center;gap:3px;cursor:pointer;" title="Refine isotropic microstrain for this phase only">
+        <input type="checkbox" data-pi="${i}" data-key="refine_mustrain" ${opts.refine_mustrain?'checked':''}> Mustrain
+      </label>
+      <span style="border-left:1px solid var(--border);height:14px;"></span>
+      <span title="March-Dollase preferred orientation: off / hold at value / refine. PO changes relative reflection intensities and can trade off with phase fraction.">PO:</span>
+      <select data-pi="${i}" data-key="po_mode" style="font-size:11px;padding:1px 4px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:3px;">
+        <option value="off" ${opts.po_mode==='off'?'selected':''}>off</option>
+        <option value="fixed" ${opts.po_mode==='fixed'?'selected':''}>fixed</option>
+        <option value="refined" ${opts.po_mode==='refined'?'selected':''}>refined</option>
+      </select>
+      <label style="display:flex;align-items:center;gap:3px;" title="PO direction h k l (space-separated). Use a physically plausible texture axis; hexagonal plate/needle textures often involve 0 0 1, but this is not automatic.">
+        axis [<input type="text" data-pi="${i}" data-key="po_axis" value="${opts.po_axis||''}" style="width:50px;font-size:11px;padding:1px 4px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:3px;text-align:center;">]
+      </label>
+      <label style="display:flex;align-items:center;gap:3px;" title="March-Dollase ratio. 1 = no texture. Refine to infer a repeatable value, then fix only after validating against baseline fits or independent texture evidence.">
+        value <input type="number" data-pi="${i}" data-key="po_value" value="${opts.po_value}" step="0.001" min="0.1" max="3.0" style="width:60px;font-size:11px;padding:1px 4px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:3px;">
+      </label>
+      ${isW2C ? `
+      <label style="display:flex;align-items:center;gap:3px;cursor:pointer;" title="After W2C cell refinement, preserve the starting axis ratios while keeping the refined volume.">
+        <input type="checkbox" data-pi="${i}" data-key="uniform_cell" ${opts.uniform_cell?'checked':''}> Uniform cell
+      </label>` : ''}
+      <span style="font-size:10px;font-style:italic;color:var(--muted);">(${sysLabel})</span>
+    `;
+    wrapper.appendChild(ctrl);
+
+    // Wire up the input change handlers
+    ctrl.querySelectorAll('[data-pi][data-key]').forEach(el => {
+      el.addEventListener('change', () => {
+        const pi = parseInt(el.getAttribute('data-pi'), 10);
+        const key = el.getAttribute('data-key');
+        if (pi < 0 || pi >= xrdPhaseOptions.length) return;
+        if (el.type === 'checkbox') {
+          xrdPhaseOptions[pi][key] = el.checked;
+        } else if (el.type === 'number') {
+          xrdPhaseOptions[pi][key] = parseFloat(el.value) || 0;
+        } else {
+          xrdPhaseOptions[pi][key] = el.value;
+        }
+        const stdRecipe = document.getElementById('xrd-standard-recipe');
+        if (stdRecipe && ['po_mode','po_axis','po_value','uniform_cell'].includes(key)) {
+          stdRecipe.checked = false;
+        }
+        if (['po_mode','po_axis','po_value','uniform_cell'].includes(key)) {
+          xrdActiveRecipeKey = null;
+        }
+      });
+    });
+
+    cont.appendChild(wrapper);
+  });
+}
+
+const XRD_PRESET_CHECKBOX_IDS = [
+  'xrd-calibration-mode',
+  'xrd-verification-mode',
+  'xrd-verify-cell',
+  'xrd-phase-isolation',
+  'xrd-zero-not-disp',
+  'xrd-refine-x',
+  'xrd-fix-y',
+  'xrd-y-nonneg',
+  'xrd-refine-uiso',
+  'xrd-refine-xyz',
+];
+
+function setXrdPresetStatus(msg, type = 'info') {
+  const el = document.getElementById('xrd-preset-status');
+  if (!el) return;
+  const colors = {info:'var(--muted)', ok:'var(--accent2)', warn:'var(--warn)', error:'var(--danger)'};
+  el.textContent = msg || '';
+  el.style.color = colors[type] || colors.info;
+}
+
+function renderXrdPresetSelect() {
+  const sel = document.getElementById('xrd-preset-select');
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = '<option value="">Select saved refinement preset...</option>';
+  xrdPresets.forEach(p => {
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    const stats = p.result_summary?.statistics;
+    const score = stats?.Rwp != null ? `, Rwp ${stats.Rwp}%` : '';
+    const updated = p.updated_at ? `, ${String(p.updated_at).slice(0, 10)}` : '';
+    const tag = p.builtin ? 'built-in' : 'saved';
+    opt.textContent = `${p.name} (${tag}${score}${updated})`;
+    sel.appendChild(opt);
+  });
+  if (current && xrdPresets.some(p => p.id === current)) sel.value = current;
+}
+
+async function refreshXrdPresets() {
+  try {
+    const resp = await fetch('/api/xrd/presets');
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    xrdPresets = data.presets || [];
+    renderXrdPresetSelect();
+    setXrdPresetStatus(xrdPresets.length ? `${xrdPresets.length} preset${xrdPresets.length !== 1 ? 's' : ''} available.` : 'No saved presets yet.', 'info');
+  } catch (e) {
+    setXrdPresetStatus('Could not load presets: ' + e.message, 'warn');
+  }
+}
+
+function getXrdControlState() {
+  const controls = {
+    wavelength: document.getElementById('xrd-wavelength')?.value || '',
+    wavelength_source: document.getElementById('xrd-source')?.value || '',
+    tt_min: document.getElementById('xrd-tt-min')?.value || '',
+    tt_max: document.getElementById('xrd-tt-max')?.value || '',
+    n_bg_coeffs: document.getElementById('xrd-bg-coeffs')?.value || 'auto',
+    instrument: document.getElementById('xrd-instrument')?.value || 'auto',
+    fix_y_value: document.getElementById('xrd-fix-y-value')?.value || '',
+    checkboxes: {},
+  };
+  XRD_PRESET_CHECKBOX_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) controls.checkboxes[id] = !!el.checked;
+  });
+  return controls;
+}
+
+function applyXrdControlState(controls = {}) {
+  const setVal = (id, value) => {
+    const el = document.getElementById(id);
+    if (el && value !== undefined && value !== null) el.value = value;
+  };
+  setVal('xrd-source', controls.wavelength_source);
+  setVal('xrd-wavelength', controls.wavelength);
+  setVal('xrd-tt-min', controls.tt_min);
+  setVal('xrd-tt-max', controls.tt_max);
+  setVal('xrd-bg-coeffs', controls.n_bg_coeffs);
+  setVal('xrd-instrument', controls.instrument);
+  setVal('xrd-fix-y-value', controls.fix_y_value);
+  Object.entries(controls.checkboxes || {}).forEach(([id, checked]) => {
+    const el = document.getElementById(id);
+    if (el) el.checked = !!checked;
+  });
+  const stdRecipe = document.getElementById('xrd-standard-recipe');
+  if (stdRecipe) stdRecipe.checked = false;
+}
+
+function stripPhaseForPreset(phase) {
+  const keep = [
+    'name', 'formula', 'source', 'cod_id', 'mp_id', 'cache_key',
+    'a', 'b', 'c', 'alpha', 'beta', 'gamma',
+    'system', 'spacegroup', 'spacegroup_number', 'Z',
+    'stick_pattern', 'tick_positions', 'cif_check', 'validation',
+    '_plot_color'
+  ];
+  const out = {};
+  keep.forEach(k => {
+    if (phase[k] !== undefined) out[k] = phase[k];
+  });
+  if ((phase.cod_id || '') === 'manual' && phase.cif_text) {
+    out.cif_text = phase.cif_text;
+  }
+  return out;
+}
+
+function summarizeResultForPreset(data) {
+  if (!data) return {};
+  return {
+    method: data.method || '',
+    statistics: data.statistics || {},
+    fit_warnings: data.fit_warnings || data.warnings || [],
+    zero_shift: data.zero_shift,
+    displacement_um: data.displacement_um,
+    displacement_param: data.displacement_param,
+    phase_results: (data.phase_results || []).map(ph => ({
+      name: ph.name,
+      formula: ph.formula,
+      spacegroup: ph.spacegroup,
+      weight_fraction_pct: ph['weight_fraction_%'],
+      weight_fraction_err_pct: ph['weight_fraction_err_%'],
+      weight_fraction_err_source: ph.weight_fraction_err_source,
+      crystallite_size_nm: ph.crystallite_size_nm,
+      crystallite_size_source: ph.crystallite_size_source,
+      fwhm_reference_two_theta: ph.fwhm_reference_two_theta,
+      fwhm_reference_hkl: ph.fwhm_reference_hkl,
+      fwhm_reference_source: ph.fwhm_reference_source,
+      preferred_orientation_value: ph.preferred_orientation_value,
+      preferred_orientation_axis: ph.preferred_orientation_axis,
+      preferred_orientation_mode: ph.preferred_orientation_mode,
+      preferred_orientation_refined: ph.preferred_orientation_refined,
+      delta_a_pct: ph.delta_a_pct,
+      delta_b_pct: ph.delta_b_pct,
+      delta_c_pct: ph.delta_c_pct,
+      delta_volume_pct: ph.delta_volume_pct,
+    })),
+  };
+}
+
+async function saveCurrentXrdPreset() {
+  if (!xrdPhases.length) {
+    setXrdPresetStatus('Add phases before saving a preset.', 'warn');
+    return;
+  }
+  _ensurePhaseOptions();
+  const sel = document.getElementById('xrd-preset-select');
+  const existing = xrdPresets.find(p => p.id === sel?.value);
+  const defaultName = existing?.name || [
+    ...new Set(xrdPhases.map(p => p.formula || p.name).filter(Boolean))
+  ].join(' + ') || 'XRD preset';
+  const name = prompt('Preset name:', existing?.builtin ? `${defaultName} copy` : defaultName);
+  if (!name || !name.trim()) return;
+
+  const payload = {
+    id: existing && !existing.builtin && existing.name === name.trim() ? existing.id : '',
+    name: name.trim(),
+    description: '',
+    phases: xrdPhases.map(stripPhaseForPreset),
+    phase_options: xrdPhaseOptions.map(o => ({...o})),
+    controls: getXrdControlState(),
+    result_summary: summarizeResultForPreset(xrdLastResult),
+  };
+
+  try {
+    const resp = await fetch('/api/xrd/presets', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || 'Save failed');
+    await refreshXrdPresets();
+    const presetSel = document.getElementById('xrd-preset-select');
+    if (presetSel) presetSel.value = data.preset.id;
+    setXrdPresetStatus(`Saved "${data.preset.name}".`, 'ok');
+  } catch (e) {
+    setXrdPresetStatus('Could not save preset: ' + e.message, 'error');
+  }
+}
+
+function applyXrdPreset(preset) {
+  applyXrdControlState(preset.controls || {});
+  if (preset.recipe_key === 'wc_w2c_synergy_s') {
+    xrdActiveRecipeKey = 'wc_w2c_synergy_s';
+    applyWcW2cPresetGlobals(true);
+    if (xrdPhases.length) {
+      applyWcW2cPresetPhaseOptions();
+      renderSelectedPhases();
+    }
+    setXrdPresetStatus(`Loaded built-in "${preset.name}". It will apply to current and newly added WC/W2C phases.`, 'ok');
+    return;
+  }
+  xrdActiveRecipeKey = null;
+  xrdPhases = (preset.phases || []).map(p => ({...p}));
+  xrdPhaseOptions = (preset.phase_options || []).map(o => ({...o}));
+  _ensurePhaseOptions();
+  _stickPhases = [];
+  xrdPhases.forEach(ph => {
+    ensurePhaseVisuals(ph);
+    addStickPhase(ph);
+  });
+  renderSelectedPhases();
+  renderCandidates();
+  if (_previewData) drawPreview();
+  setXrdPresetStatus(`Loaded "${preset.name}". Add/select an XRD data file, then run GSAS-II.`, 'ok');
+}
+
+function loadSelectedXrdPreset() {
+  const id = document.getElementById('xrd-preset-select')?.value;
+  const preset = xrdPresets.find(p => p.id === id);
+  if (!preset) {
+    setXrdPresetStatus('Select a preset to load.', 'warn');
+    return;
+  }
+  applyXrdPreset(preset);
+}
+
+async function deleteSelectedXrdPreset() {
+  const id = document.getElementById('xrd-preset-select')?.value;
+  const preset = xrdPresets.find(p => p.id === id);
+  if (!preset) {
+    setXrdPresetStatus('Select a preset to delete.', 'warn');
+    return;
+  }
+  if (preset.builtin) {
+    setXrdPresetStatus('Built-in presets cannot be deleted. Save a modified copy if needed.', 'warn');
+    return;
+  }
+  if (!confirm(`Delete preset "${preset.name}"?`)) return;
+  try {
+    const resp = await fetch('/api/xrd/presets/' + encodeURIComponent(id), {
+      method: 'DELETE',
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || 'Delete failed');
+    await refreshXrdPresets();
+    setXrdPresetStatus(`Deleted "${preset.name}".`, 'ok');
+  } catch (e) {
+    setXrdPresetStatus('Could not delete preset: ' + e.message, 'error');
+  }
+}
+
+// ── Run Refinement ──────────────────────────────────────────────────────────
+async function runXRD(method) {
+  method = method || 'gsas2';
+  const errEl = document.getElementById('xrd-error-box');
+  errEl.classList.remove('visible');
+
+  if (!xrdFile)        { showXrdError('Upload an XRD data file first.'); return; }
+  if (!xrdPhases.length){ showXrdError('Add at least one phase to refine.'); return; }
+
+  const legacyLeBailBtn = document.getElementById('btn-xrd');
+  if (legacyLeBailBtn) legacyLeBailBtn.disabled = true;
+  const legacyRietveldBtn = document.getElementById('btn-xrd-rietveld');
+  if (legacyRietveldBtn) legacyRietveldBtn.disabled = true;
+  const gsas2Btn = document.getElementById('btn-xrd-gsas2');
+  if (gsas2Btn) gsas2Btn.disabled = true;
+  document.getElementById('xrd-progress-wrap').classList.add('visible');
+
+  const stdRecipe = document.getElementById('xrd-standard-recipe');
+  if ((stdRecipe && stdRecipe.checked) || xrdActiveRecipeKey === 'wc_w2c_synergy_s') {
+    applyWcW2cPresetGlobals(true);
+    applyWcW2cPresetPhaseOptions();
+    renderSelectedPhases();
+  }
+
+  const methodLabel = {rietveld:'Rietveld', gsas2:'GSAS-II'}[method] || 'Le Bail';
+  const steps = method === 'gsas2' ? [
+    'Parsing data file...',
+    'Validating CIF structures...',
+    'GSAS-II: building project...',
+    'GSAS-II: refining background + scale...',
+    'GSAS-II: refining profile parameters...',
+    'GSAS-II: refining cell + atoms...',
+    'Extracting results and generating plots...',
+  ] : method === 'rietveld' ? [
+    'Parsing data file...',
+    'Validating phase structures...',
+    'Computing structure factors from CIF...',
+    'Optimising per-phase scale factors...',
+    'Computing Rwp, Rp, χ², crystallite sizes...',
+    'Generating plots...',
+  ] : [
+    'Parsing data file...',
+    'Validating phase structures...',
+    'Computing structure factors with pymatgen...',
+    'Running Le Bail intensity partitioning...',
+    'Refining cell parameters and peak shape...',
+    'Computing Rwp, Rp, χ², crystallite sizes...',
+    'Generating plots...',
+  ];
+  let si = 0;
+  document.getElementById('xrd-progress-text').textContent = `${methodLabel}: ${steps[0]}`;
+  const timer = setInterval(() => {
+    si = (si+1) % steps.length;
+    document.getElementById('xrd-progress-text').textContent = `${methodLabel}: ${steps[si]}`;
+  }, 3000);
+
+  try {
+    const fd = new FormData();
+    fd.append('file',        xrdFile);
+    fd.append('wavelength',  document.getElementById('xrd-wavelength').value);
+    fd.append('wavelength_label',
+      document.getElementById('xrd-source').options[
+        document.getElementById('xrd-source').selectedIndex].text);
+    fd.append('sample_id',   document.getElementById('xrd-sample-id').value || xrdFile.name);
+    fd.append('tt_min',      document.getElementById('xrd-tt-min').value);
+    fd.append('tt_max',      document.getElementById('xrd-tt-max').value);
+    fd.append('n_bg_coeffs', document.getElementById('xrd-bg-coeffs').value || 'auto');
+    fd.append('output_dir',  document.getElementById('xrd-output-dir').value);
+    fd.append('method',      method);
+    // Instrument selection
+    const instSelect = document.getElementById('xrd-instrument');
+    if (instSelect) {
+      fd.append('instrument', instSelect.value);
+    }
+    // Calibration mode — refine instrument profile from standard
+    const calCheckbox = document.getElementById('xrd-calibration-mode');
+    if (calCheckbox && calCheckbox.checked) {
+      fd.append('calibration_mode', 'true');
+    }
+    // Verification mode — skip cell/Uiso/size stages (GSAS-II only)
+    const verifyCheckbox = document.getElementById('xrd-verification-mode');
+    if (verifyCheckbox && verifyCheckbox.checked) {
+      fd.append('verification_mode', 'true');
+    }
+    // Verification + cell — turn cell refinement back on in Stage 6 only
+    const verifyCellCheckbox = document.getElementById('xrd-verify-cell');
+    if (verifyCellCheckbox && verifyCellCheckbox.checked) {
+      fd.append('verify_refine_cell', 'true');
+    }
+    // Phase isolation — per-phase curves from GSAS-II ycalc instead of manual reconstruction
+    const phaseIsoCheckbox = document.getElementById('xrd-phase-isolation');
+    if (phaseIsoCheckbox && phaseIsoCheckbox.checked) {
+      fd.append('phase_isolation', 'true');
+    }
+    // Refine Zero (fix Disp) — diagnostic swap of position handle
+    const zeroNotDispCheckbox = document.getElementById('xrd-zero-not-disp');
+    if (zeroNotDispCheckbox && zeroNotDispCheckbox.checked) {
+      fd.append('verify_use_zero_not_displace', 'true');
+    }
+    // Free X — Lorentzian strain diagnostic
+    const refineXCheckbox = document.getElementById('xrd-refine-x');
+    if (refineXCheckbox && refineXCheckbox.checked) {
+      fd.append('verify_refine_x', 'true');
+    }
+    // Fix Y — overrides any Y refinement
+    const fixYCheckbox = document.getElementById('xrd-fix-y');
+    if (fixYCheckbox && fixYCheckbox.checked) {
+      fd.append('verify_fix_y', 'true');
+      const fixYVal = document.getElementById('xrd-fix-y-value');
+      if (fixYVal && fixYVal.value && !isNaN(parseFloat(fixYVal.value))) {
+        fd.append('verify_y_fixed_value', fixYVal.value.trim());
+      }
+    }
+    // Y ≥ 0 — post-Stage-6 clamp of negative Y
+    const yNonnegCheckbox = document.getElementById('xrd-y-nonneg');
+    if (yNonnegCheckbox && yNonnegCheckbox.checked) {
+      fd.append('verify_y_nonnegative', 'true');
+    }
+    // Refine Uiso (Stage 4)
+    const refineUisoCheckbox = document.getElementById('xrd-refine-uiso');
+    if (refineUisoCheckbox && refineUisoCheckbox.checked) {
+      fd.append('verify_refine_uiso', 'true');
+    }
+    // Refine size (Stage 4b) — legacy: all phases
+    const refineSizeCheckbox = document.getElementById('xrd-refine-size');
+    if (refineSizeCheckbox && refineSizeCheckbox.checked) {
+      fd.append('verify_refine_size', 'true');
+    }
+    // Per-phase refinement options (preferred: phase_options array).
+    // Legacy WC/W2C checkboxes are no longer present in the UI; if you
+    // see fields below, an old cached HTML is still in use.
+    const _phaseOptsBackend = _phaseOptsToBackendJSON();
+    if (_phaseOptsBackend && _phaseOptsBackend.length) {
+      fd.append('phase_options', JSON.stringify(_phaseOptsBackend));
+    }
+    // Refine XYZ (Stage 5)
+    const refineXyzCheckbox = document.getElementById('xrd-refine-xyz');
+    if (refineXyzCheckbox && refineXyzCheckbox.checked) {
+      fd.append('refine_xyz', 'true');
+    }
+    // Include instrument parameter file if provided (GSAS-II only)
+    const instprmInput = document.getElementById('xrd-instprm-file');
+    if (instprmInput && instprmInput.files.length > 0) {
+      fd.append('instprm_file', instprmInput.files[0]);
+    }
+    // Send cached phases without CIF text; keep manual uploads inline
+    // because they do not exist in the server-side CIF cache.
+    const phases_stripped = xrdPhases.map(p => {
+      if ((p.cod_id || '') === 'manual') return p;
+      const {cif_text, ...rest} = p; return rest;
+    });
+    fd.append('phases', JSON.stringify(phases_stripped));
+
+    // 5-minute timeout — refinements can be slow, especially without MKL numpy
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 300000);
+
+    const resp = await fetch('/api/process_xrd', {method:'POST', body:fd, signal: controller.signal});
+    clearTimeout(timeout);
+    const data = await resp.json();
+    clearInterval(timer);
+    document.getElementById('xrd-progress-wrap').classList.remove('visible');
+
+    if (data.error) {
+      showXrdError(data.error + (data.trace ? '\n\n' + data.trace : ''));
+      if (legacyLeBailBtn) legacyLeBailBtn.disabled = false;
+      if (legacyRietveldBtn) legacyRietveldBtn.disabled = false;
+      if (document.getElementById('btn-xrd-gsas2')) document.getElementById('btn-xrd-gsas2').disabled = false;
+      return;
+    }
+    showXRDResults(data);
+  } catch(e) {
+    clearInterval(timer);
+    document.getElementById('xrd-progress-wrap').classList.remove('visible');
+    if (e.name === 'AbortError') {
+      showXrdError('Refinement timed out after 5 minutes.\n\n'
+        + 'Try reducing the 2θ range, using fewer phases, or using Le Bail instead of Rietveld.\n'
+        + 'If running via "python app.py", use run.bat instead — it sets up an optimised environment.');
+    } else if (e.message === 'Failed to fetch') {
+      showXrdError('Connection to server lost during refinement.\n\n'
+        + 'The server may have crashed or restarted. Check the terminal/command prompt for error details.\n\n'
+        + 'If you ran "python app.py" directly, try using run.bat instead — it ensures all dependencies '
+        + 'are correctly installed in an isolated environment.');
+    } else {
+      showXrdError('Unexpected error: ' + e.message);
+    }
+  }
+  if (legacyLeBailBtn) legacyLeBailBtn.disabled = false;
+  if (legacyRietveldBtn) legacyRietveldBtn.disabled = false;
+  if (document.getElementById('btn-xrd-gsas2')) document.getElementById('btn-xrd-gsas2').disabled = false;
+}
+
+function fmtResultValue(v, digits = 3) {
+  if (v === null || v === undefined || v === '') return '—';
+  const n = Number(v);
+  if (!Number.isFinite(n)) return escHtml(v);
+  return Number(n.toFixed(digits)).toString();
+}
+
+function fmtPhaseAxis(axis) {
+  if (Array.isArray(axis)) return axis.join(' ');
+  return String(axis || '').trim();
+}
+
+function renderReusableFitParameters(data) {
+  const box = document.getElementById('xrd-reusable-fit');
+  if (!box) return;
+  const phases = data.phase_results || [];
+  if (!phases.length) {
+    box.innerHTML = '';
+    return;
+  }
+
+  const cards = phases.map((ph, i) => {
+    const color = (xrdPhases[i] && xrdPhases[i]._plot_color) || PHASE_COLORS[i % PHASE_COLORS.length];
+    const opts = (xrdPhaseOptions && xrdPhaseOptions[i]) || {};
+    const poMode = opts.po_mode || 'off';
+    const poAxis = fmtPhaseAxis(opts.po_axis);
+    const poVal = opts.po_value != null ? fmtResultValue(opts.po_value, 3) : '1';
+    const poText = poMode === 'off'
+      ? 'PO off'
+      : `PO ${escHtml(poMode)} [${escHtml(poAxis || 'not set')}] value ${poVal}`;
+    const poResultAxis = Array.isArray(ph.preferred_orientation_axis)
+      ? ph.preferred_orientation_axis.join(' ')
+      : '';
+    const poResultMode = ph.preferred_orientation_mode
+      ? String(ph.preferred_orientation_mode).replace(/_/g, ' ')
+      : '';
+    const poResultLine = ph.preferred_orientation_value != null
+      ? `${fmtResultValue(ph.preferred_orientation_value, 4)}${poResultAxis ? ` [${escHtml(poResultAxis)}]` : ''}${poResultMode ? ` (${escHtml(poResultMode)})` : ''}`
+      : 'not active';
+
+    const hapBits = [
+      opts.refine_size ? 'Size on' : 'Size off',
+      opts.refine_mustrain ? 'Strain on' : 'Strain off',
+      opts.uniform_cell ? 'Uniform cell on' : 'Uniform cell off',
+    ];
+
+    const fwhmRef = ph.fwhm_reference_two_theta != null
+      ? `${fmtResultValue(ph.fwhm_reference_two_theta, 2)}&deg;`
+      : '—';
+    const fwhmHkl = Array.isArray(ph.fwhm_reference_hkl)
+      ? ` (${escHtml(ph.fwhm_reference_hkl.join(''))})`
+      : '';
+    const fwhmSource = ph.fwhm_reference_source
+      ? `, ${escHtml(String(ph.fwhm_reference_source).replace(/_/g, ' '))}`
+      : '';
+    const sizeLine = ph.crystallite_size_nm != null
+      ? `${fmtResultValue(ph.crystallite_size_nm, 2)} nm`
+      : '—';
+    const sizeSource = ph.crystallite_size_source
+      ? ` (${escHtml(String(ph.crystallite_size_source).replace(/_/g, ' '))})`
+      : '';
+    const wtErr = ph['weight_fraction_err_%'] != null
+      ? ` &plusmn; ${fmtResultValue(ph['weight_fraction_err_%'], 2)}`
+      : '';
+    const wtSource = ph.weight_fraction_err_source
+      ? ` (${escHtml(String(ph.weight_fraction_err_source).replace(/_/g, ' '))})`
+      : '';
+    const cellBits = [];
+    if (ph.delta_volume_pct != null) cellBits.push(`dV/V0 ${fmtResultValue(ph.delta_volume_pct, 3)}%`);
+    if (ph.delta_a_pct != null) cellBits.push(`da/a0 ${fmtResultValue(ph.delta_a_pct, 3)}%`);
+    if (ph.delta_b_pct != null) cellBits.push(`db/b0 ${fmtResultValue(ph.delta_b_pct, 3)}%`);
+    if (ph.delta_c_pct != null) cellBits.push(`dc/c0 ${fmtResultValue(ph.delta_c_pct, 3)}%`);
+
+    return `<div class="reusable-fit-card" style="border-color:${color};box-shadow:inset 3px 0 0 ${color};">
+      <div class="phase-name" style="color:${color};">${escHtml(ph.name || ph.formula || `Phase ${i + 1}`)}</div>
+      <div><span class="reuse-chip">${poText}</span>${hapBits.map(x => `<span class="reuse-chip">${escHtml(x)}</span>`).join('')}</div>
+      <div class="reuse-metrics">
+        <div class="reuse-metric">
+          <div class="reuse-label">Cell change</div>
+          <div class="reuse-value">${cellBits.length ? cellBits.join('<br>') : 'no deltas reported'}</div>
+        </div>
+        <div class="reuse-metric">
+          <div class="reuse-label">FWHM reference</div>
+          <div class="reuse-value">${fwhmRef}${fwhmHkl}${fwhmSource}</div>
+        </div>
+        <div class="reuse-metric">
+          <div class="reuse-label">PO result</div>
+          <div class="reuse-value">${poResultLine}</div>
+        </div>
+        <div class="reuse-metric">
+          <div class="reuse-label">Size output</div>
+          <div class="reuse-value">${sizeLine}${sizeSource}</div>
+        </div>
+        <div class="reuse-metric">
+          <div class="reuse-label">Wt% uncertainty</div>
+          <div class="reuse-value">${fmtResultValue(ph['weight_fraction_%'], 1)}${wtErr}%${wtSource}</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  box.innerHTML = `<div class="reusable-fit">
+    <h4>Reusable Fit Parameters</h4>
+    <div class="hint">
+      These are the phase-card settings submitted for this run plus fitted outputs worth checking before the next run.
+      Treat them as a record of the validated recipe; named preset save/load is the next stage.
+    </div>
+    <div class="reusable-fit-grid">${cards}</div>
+  </div>`;
+}
+
+function renderFitWarnings(data) {
+  const panel = document.getElementById('xrd-fit-warnings');
+  if (!panel) return;
+  const warnings = data.fit_warnings || data.warnings || [];
+  if (!warnings.length) {
+    panel.classList.remove('visible');
+    panel.innerHTML = '';
+    return;
+  }
+  panel.innerHTML = `<h4>Fit Warnings</h4>
+    <ul>${warnings.map(w => `<li>${escHtml(w)}</li>`).join('')}</ul>`;
+  panel.classList.add('visible');
+}
+
+function _fitNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function _signed(v, digits = 2, suffix = '') {
+  if (v === null || v === undefined || !Number.isFinite(Number(v))) return '—';
+  const n = Number(v);
+  return `${n > 0 ? '+' : ''}${Number(n.toFixed(digits))}${suffix}`;
+}
+
+function _cmpPhaseKey(ph, idx) {
+  const raw = ph?.formula || (ph?.name || '').split(/\s+/)[0] || `phase-${idx}`;
+  return String(raw).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function buildXrdFitSnapshot(data) {
+  const controls = getXrdControlState();
+  const phaseOptions = (xrdPhaseOptions || []).map(o => ({...o}));
+  const phaseSummaries = (data.phase_results || []).map((ph, i) => ({
+    key: _cmpPhaseKey(ph, i),
+    name: ph.name || ph.formula || `Phase ${i + 1}`,
+    formula: ph.formula || xrdPhases[i]?.formula || '',
+    wt: _fitNum(ph['weight_fraction_%']),
+    wt_err: _fitNum(ph['weight_fraction_err_%']),
+    dv: _fitNum(ph.delta_volume_pct),
+    da: _fitNum(ph.delta_a_pct),
+    db: _fitNum(ph.delta_b_pct),
+    dc: _fitNum(ph.delta_c_pct),
+    b_iso: _fitNum(ph.B_iso),
+    size: _fitNum(ph.crystallite_size_nm),
+    fwhm: _fitNum(ph.fwhm_deg),
+    po_value: _fitNum(ph.preferred_orientation_value),
+    po_axis: Array.isArray(ph.preferred_orientation_axis)
+      ? ph.preferred_orientation_axis.join(' ')
+      : '',
+    po_mode: ph.preferred_orientation_mode || '',
+  }));
+  return {
+    id: `fit-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    label: document.getElementById('xrd-sample-id')?.value || xrdFile?.name || 'XRD fit',
+    method: data.method || 'GSAS-II',
+    created_at: new Date().toLocaleString(),
+    statistics: data.statistics || {},
+    warnings: data.fit_warnings || data.warnings || [],
+    controls,
+    phase_options: phaseOptions,
+    phases: phaseSummaries,
+  };
+}
+
+function fitFeatureSet(snapshot) {
+  const features = new Set();
+  const cb = snapshot?.controls?.checkboxes || {};
+  const add = (on, label) => { if (on) features.add(label); };
+  add(cb['xrd-verification-mode'], 'quick constrained fit');
+  add(cb['xrd-verify-cell'], 'cell refinement');
+  add(cb['xrd-phase-isolation'], 'phase isolation');
+  add(cb['xrd-zero-not-disp'], 'zero shift instead of displacement');
+  add(cb['xrd-refine-x'], 'free X broadening');
+  add(cb['xrd-fix-y'], 'fixed Y');
+  add(cb['xrd-y-nonneg'], 'Y nonnegative clamp');
+  add(cb['xrd-refine-uiso'], 'Uiso refinement');
+  add(cb['xrd-refine-xyz'], 'XYZ refinement');
+  (snapshot?.phase_options || []).forEach((o, i) => {
+    if (o.refine_size) features.add(`phase ${i + 1} size`);
+    if (o.refine_mustrain) features.add(`phase ${i + 1} microstrain`);
+    if (o.uniform_cell) features.add(`phase ${i + 1} uniform cell`);
+    if (o.po_mode === 'fixed') features.add(`phase ${i + 1} fixed PO`);
+    if (o.po_mode === 'refined') features.add(`phase ${i + 1} refined PO`);
+  });
+  return features;
+}
+
+function compareXrdFits(current, baseline) {
+  const st = current.statistics || {};
+  const bst = baseline.statistics || {};
+  const rwpDelta = _fitNum(st.Rwp) !== null && _fitNum(bst.Rwp) !== null
+    ? _fitNum(st.Rwp) - _fitNum(bst.Rwp) : null;
+  const gofDelta = _fitNum(st.GoF) !== null && _fitNum(bst.GoF) !== null
+    ? _fitNum(st.GoF) - _fitNum(bst.GoF) : null;
+  const chiDelta = _fitNum(st.chi2) !== null && _fitNum(bst.chi2) !== null
+    ? _fitNum(st.chi2) - _fitNum(bst.chi2) : null;
+
+  const curFeatures = fitFeatureSet(current);
+  const baseFeatures = fitFeatureSet(baseline);
+  const added = [...curFeatures].filter(x => !baseFeatures.has(x));
+  const removed = [...baseFeatures].filter(x => !curFeatures.has(x));
+  const uisoAdded = added.includes('Uiso refinement');
+
+  const baseByKey = new Map(baseline.phases.map((p, i) => [p.key || `idx-${i}`, p]));
+  const phaseLines = [];
+  const interpretation = [];
+  current.phases.forEach((ph, i) => {
+    const base = baseByKey.get(ph.key) || baseline.phases[i];
+    if (!base) return;
+    const bits = [];
+    if (ph.wt !== null && base.wt !== null) {
+      const d = ph.wt - base.wt;
+      if (Math.abs(d) >= 0.05) bits.push(`wt ${_signed(d, 2, ' pp')}`);
+      const errScale = Math.max(ph.wt_err || 0, base.wt_err || 0);
+      if (errScale > 0 && Math.abs(d) > errScale) {
+        interpretation.push(`${ph.name} weight fraction shifted more than its reported uncertainty.`);
+      }
+    }
+    if (ph.dv !== null && base.dv !== null) {
+      const d = ph.dv - base.dv;
+      if (Math.abs(d) >= 0.05) bits.push(`dV/V0 ${_signed(d, 2, '%')}`);
+    }
+    if (ph.size !== null && base.size !== null) {
+      const d = ph.size - base.size;
+      if (Math.abs(d) >= 0.05) bits.push(`size ${_signed(d, 2, ' nm')}`);
+    }
+    if (ph.po_value !== null) {
+      if (base.po_value !== null) {
+        const d = ph.po_value - base.po_value;
+        if (Math.abs(d) >= 0.001) bits.push(`PO ${fmtResultValue(ph.po_value, 4)} (${_signed(d, 4)})`);
+      } else if (Math.abs(ph.po_value - 1.0) >= 0.001) {
+        bits.push(`PO ${fmtResultValue(ph.po_value, 4)}${ph.po_axis ? ` [${ph.po_axis}]` : ''}`);
+      }
+    }
+    if (ph.b_iso !== null && base.b_iso !== null) {
+      const d = ph.b_iso - base.b_iso;
+      if (Math.abs(d) >= 0.02) bits.push(`B_iso ${_signed(d, 3, ' A^2')}`);
+    }
+    if (ph.b_iso !== null && (ph.b_iso < 0 || ph.b_iso > 3.0)) {
+      interpretation.push(`${ph.name} has B_iso=${fmtResultValue(ph.b_iso, 3)} A^2; check whether Uiso is physically plausible for this phase.`);
+    }
+    if (bits.length) phaseLines.push(`${ph.name}: ${bits.join(', ')}`);
+  });
+
+  if (uisoAdded) {
+    interpretation.push('Uiso was added. A better Rwp may reflect Debye-Waller intensity reweighting, especially at high angle, rather than a more accurate composition. Check B_iso values and whether wt% shifts are chemically plausible.');
+    if (rwpDelta !== null && rwpDelta < 0) {
+      interpretation.push(`Rwp improved by ${Math.abs(rwpDelta).toFixed(2)}%, but that improvement should be judged against B_iso and wt% stability, not the statistic alone.`);
+    }
+  }
+  if (added.some(x => x.includes('refined PO'))) {
+    interpretation.push('Preferred orientation was refined. This can correct real texture, but it also changes relative reflection intensities and can trade off with phase fraction; keep it only if the refined value is repeatable and wt% stays stable.');
+  }
+  if (added.some(x => x.includes('fixed PO'))) {
+    interpretation.push('A fixed preferred-orientation value was added. Fixed PO should come from a prior validated refinement, repeated related samples, or an independent texture measurement, not from a one-off guess.');
+  }
+  if (added.some(x => x.includes('size'))) {
+    interpretation.push('Phase-size refinement was added. Size can compensate for profile or instrument broadening; look for peak-width residuals specific to that phase, not just a lower Rwp.');
+  }
+  if (added.some(x => x.includes('microstrain'))) {
+    interpretation.push('Microstrain was added. Size and strain broadening can trade off; strain should be supported by angle/hkl-dependent broadening in the residuals.');
+  }
+  if (added.includes('XYZ refinement')) {
+    interpretation.push('XYZ refinement was added. Atom positions are high risk in lab XRD and can absorb wrong CIF, symmetry, background, or instrument errors.');
+  }
+  if (added.some(x => x.includes('uniform cell'))) {
+    interpretation.push('Uniform-cell scaling was added. Treat it as a diagnostic constraint: a small penalty may support uniform contraction, while a larger penalty suggests anisotropic cell change or model mismatch.');
+  }
+  if (added.length && rwpDelta !== null && rwpDelta > -0.3) {
+    interpretation.push('Small Rwp improvement for added fit freedoms; possible overfitting unless residuals improve in the expected region.');
+  }
+  if ((current.warnings || []).length > (baseline.warnings || []).length) {
+    interpretation.push('The current fit has more warnings than the baseline.');
+  }
+  if (!interpretation.length) {
+    interpretation.push('No obvious comparison warning from the stored baseline.');
+  }
+
+  return {
+    rwpDelta, gofDelta, chiDelta,
+    warningDelta: (current.warnings || []).length - (baseline.warnings || []).length,
+    added, removed, phaseLines, interpretation,
+  };
+}
+
+function markCurrentXrdBaseline() {
+  if (!xrdLastFitSnapshot) return;
+  xrdBaselineFit = JSON.parse(JSON.stringify(xrdLastFitSnapshot));
+  renderBaselineComparison();
+}
+
+function clearXrdBaseline() {
+  xrdBaselineFit = null;
+  renderBaselineComparison();
+}
+
+function renderBaselineComparison() {
+  const box = document.getElementById('xrd-baseline-comparison');
+  if (!box) return;
+  if (!xrdLastFitSnapshot) {
+    box.innerHTML = '';
+    return;
+  }
+
+  if (!xrdBaselineFit) {
+    box.innerHTML = `<div class="baseline-panel">
+      <h4>Baseline Comparison</h4>
+      <div class="baseline-row">
+        <span class="baseline-summary">Baseline: none set. Mark a constrained, physically plausible fit before testing extra corrections.</span>
+        <button type="button" class="btn-sm fit-guide-btn" onclick="markCurrentXrdBaseline()">Mark current as baseline</button>
+      </div>
+      <div class="baseline-summary">Session-only: this does not save to disk and does not change refinement settings.</div>
+    </div>`;
+    return;
+  }
+
+  const sameFit = xrdBaselineFit.id === xrdLastFitSnapshot.id;
+  const cmp = compareXrdFits(xrdLastFitSnapshot, xrdBaselineFit);
+  const baseStats = xrdBaselineFit.statistics || {};
+  const baseLabel = `${escHtml(xrdBaselineFit.label)} · Rwp ${escHtml(baseStats.Rwp ?? '—')}% · GoF ${escHtml(baseStats.GoF ?? '—')}`;
+  const comparisonHtml = sameFit
+    ? `<div class="baseline-summary">Current fit is marked as the baseline. Run another fit to compare.</div>`
+    : `<div class="baseline-grid">
+        <div class="baseline-metric"><div class="label">Rwp</div><div>${_signed(cmp.rwpDelta, 2, '%')}</div></div>
+        <div class="baseline-metric"><div class="label">GoF</div><div>${_signed(cmp.gofDelta, 2)}</div></div>
+        <div class="baseline-metric"><div class="label">Chi2</div><div>${_signed(cmp.chiDelta, 3)}</div></div>
+        <div class="baseline-metric"><div class="label">Warnings</div><div>${_signed(cmp.warningDelta, 0)}</div></div>
+      </div>
+      <div class="baseline-detail">
+        ${cmp.added.length ? `<div><span style="color:var(--muted);">Added settings:</span> ${cmp.added.map(escHtml).join(', ')}</div>` : ''}
+        ${cmp.removed.length ? `<div><span style="color:var(--muted);">Removed settings:</span> ${cmp.removed.map(escHtml).join(', ')}</div>` : ''}
+        ${cmp.phaseLines.length ? `<div><span style="color:var(--muted);">Phase shifts:</span><br>${cmp.phaseLines.map(escHtml).join('<br>')}</div>` : ''}
+        <div><span style="color:var(--muted);">Interpretation:</span><br>${cmp.interpretation.map(escHtml).join('<br>')}</div>
+      </div>`;
+
+  box.innerHTML = `<div class="baseline-panel">
+    <h4>Baseline Comparison</h4>
+    <div class="baseline-row">
+      <span class="baseline-summary">Baseline: ${baseLabel}</span>
+      <button type="button" class="btn-sm" onclick="markCurrentXrdBaseline()">${sameFit ? 'Replace baseline' : 'Replace baseline'}</button>
+      <button type="button" class="btn-sm" onclick="clearXrdBaseline()">Clear</button>
+    </div>
+    ${comparisonHtml}
+  </div>`;
+}
+
+function showXRDResults(data) {
+  xrdLastResult = data;
+  xrdLastFitSnapshot = buildXrdFitSnapshot(data);
+  const panel = document.getElementById('xrd-results-panel');
+  panel.classList.add('visible');
+
+  const st = data.statistics || {};
+  const gof = parseFloat(st.GoF || 0);
+  const gofClass = gof < 3 ? 'green' : gof < 6 ? 'blue' : 'yellow';
+  document.getElementById('xrd-stats-pills').innerHTML =
+    `<span class="pill ${gofClass}">GoF = ${st.GoF}</span>
+     <span class="pill blue">Rwp = ${st.Rwp}%</span>
+     <span class="pill blue">Rp = ${st.Rp}%</span>`;
+
+  document.getElementById('xrd-pymatgen-pill').innerHTML = data.pymatgen_used
+    ? '<span class="pill green" title="Structure factors computed with pymatgen XRDCalculator">pymatgen ✓</span>'
+    : '<span class="pill yellow" title="Pymatgen unavailable — used observed peak heights for seeding">fallback seeding</span>';
+
+  // Stats grid
+  const sg = document.getElementById('xrd-stats-grid');
+  sg.innerHTML = '';
+  const statBoxes = [
+    {l:'Rwp',v:st.Rwp+'%'}, {l:'Rp',v:st.Rp+'%'}, {l:'χ²',v:st.chi2},
+    {l:'GoF',v:st.GoF}, {l:'Zero shift',v:data.zero_shift+'°'}
+  ];
+  // Sample displacement (DisplaceX for BB, DisplaceY for capillary).
+  // Surfaces the cell-vs-displacement trade-off in verify+cell runs.
+  if (data.displacement_um != null && data.displacement_param) {
+    statBoxes.push({
+      l: data.displacement_param,
+      v: Number(data.displacement_um).toFixed(1) + ' µm'
+    });
+  }
+  statBoxes.forEach(s => {
+    sg.innerHTML += `<div class="stat-box">
+      <div class="stat-label">${s.l}</div>
+      <div class="stat-val" style="font-size:18px;">${s.v}</div></div>`;
+  });
+
+  renderFitWarnings(data);
+  renderBaselineComparison();
+  renderReusableFitParameters(data);
+
+  // Phase results
+  const pr = document.getElementById('xrd-phase-results');
+  pr.innerHTML = '';
+  (data.phase_results || []).forEach((ph, i) => {
+    const c = (xrdPhases[i] && xrdPhases[i]._plot_color) || PHASE_COLORS[i % PHASE_COLORS.length];
+    const fwhmRef = ph.fwhm_reference_two_theta ?? 40;
+    const fwhmHkl = Array.isArray(ph.fwhm_reference_hkl)
+      ? ` (${ph.fwhm_reference_hkl.join('')})`
+      : '';
+    const sizeSource = ph.crystallite_size_source
+      ? ` <span style="color:var(--muted);font-size:10px;">(${String(ph.crystallite_size_source).replace(/_/g, ' ')})</span>`
+      : '';
+    const wtErrSource = ph.weight_fraction_err_source
+      ? ` title="Uncertainty source: ${String(ph.weight_fraction_err_source).replace(/"/g, '&quot;')}"`
+      : '';
+    const wtSourceText = [
+      ph.weight_fraction_method ? String(ph.weight_fraction_method).replace(/_/g, ' ') : null,
+      ph.weight_fraction_err_source ? `err ${String(ph.weight_fraction_err_source).replace(/_/g, ' ')}` : null,
+    ].filter(Boolean).join('; ');
+    const wtSource = wtSourceText
+      ? ` <span style="color:var(--muted);font-size:10px;">(${wtSourceText})</span>`
+      : '';
+    const cellDeltaParts = [];
+    if (ph.delta_volume_pct != null) cellDeltaParts.push(`ΔV/V0=${ph.delta_volume_pct}%`);
+    if (ph.delta_a_pct != null) cellDeltaParts.push(`Δa/a0=${ph.delta_a_pct}%`);
+    if (ph.delta_b_pct != null) cellDeltaParts.push(`Δb/b0=${ph.delta_b_pct}%`);
+    if (ph.delta_c_pct != null) cellDeltaParts.push(`Δc/c0=${ph.delta_c_pct}%`);
+    const cellDeltaHtml = cellDeltaParts.length
+      ? `<div style="grid-column:1/-1;padding-top:4px;border-top:1px solid rgba(255,255,255,0.06);"><span style="color:var(--muted);">Cell change vs input CIF = </span>${cellDeltaParts.join(' · ')}</div>`
+      : '';
+    const poAxis = Array.isArray(ph.preferred_orientation_axis)
+      ? ph.preferred_orientation_axis.join(' ')
+      : '';
+    const poMode = ph.preferred_orientation_mode
+      ? String(ph.preferred_orientation_mode).replace(/_/g, ' ')
+      : '';
+    const poResultHtml = ph.preferred_orientation_value != null
+      ? `<div><span style="color:var(--muted);">PO = </span>${fmtResultValue(ph.preferred_orientation_value, 4)}${poAxis ? ` [${poAxis}]` : ''}${poMode ? ` (${poMode})` : ''}</div>`
+      : '';
+    pr.innerHTML += `
+      <div style="background:var(--surface2);border:1px solid ${c};
+                  border-radius:8px;padding:14px 16px;margin-bottom:8px;">
+        <div style="font-weight:800;font-size:14px;color:${c};margin-bottom:10px;">
+          ${ph.name}
+          <span style="font-size:11px;font-weight:400;color:var(--muted);margin-left:8px;">
+            ${ph.spacegroup||''} · COD ${ph.cod_id||'manual'}
+          </span>
+          ${ph.seeded_by==='pymatgen'
+            ? '<span class="pill green" style="font-size:10px;padding:2px 8px;margin-left:8px;">SF ✓</span>'
+            : ''}
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;
+                    font-family:var(--mono);font-size:12px;">
+          <div><span style="color:var(--muted);">a = </span>${ph.a} Å</div>
+          <div><span style="color:var(--muted);">b = </span>${ph.b} Å</div>
+          <div><span style="color:var(--muted);">c = </span>${ph.c} Å</div>
+          <div><span style="color:var(--muted);">α = </span>${ph.alpha}°</div>
+          <div><span style="color:var(--muted);">β = </span>${ph.beta}°</div>
+          <div><span style="color:var(--muted);">γ = </span>${ph.gamma}°</div>
+          <div><span style="color:var(--muted);">Size = </span>${ph.crystallite_size_nm ?? '—'} nm${sizeSource}</div>
+          <div><span style="color:var(--muted);">FWHM @ ${Number(fwhmRef).toFixed(2)}°${fwhmHkl} = </span>${ph.fwhm_deg}°</div>
+          <div><span style="color:var(--muted);">η @ ${Number(fwhmRef).toFixed(2)}° = </span>${ph.eta_at_fwhm_reference ?? ph.eta_at_40deg ?? ph.eta_at_strongest ?? ph.eta ?? '—'}</div>
+          ${ph.Y != null ? `<div><span style="color:var(--muted);">Y = </span>${ph.Y} (size)</div>` : ''}
+          ${ph.X != null ? `<div><span style="color:var(--muted);">X = </span>${ph.X} (strain)</div>` : ''}
+          ${poResultHtml}
+          <div${wtErrSource}><span style="color:var(--muted);">Wt% = </span>${ph['weight_fraction_%']}${ph['weight_fraction_err_%'] != null ? ' ± ' + ph['weight_fraction_err_%'] : ''}%${wtSource}</div>
+          ${cellDeltaHtml}
+        </div>
+      </div>`;
+  });
+
+  // Plot — interactive if plot_data available, static fallback
+  const plotEl = document.getElementById('xrd-result-plot');
+  const interactivePlot = document.getElementById('xrd-interactive-plot');
+
+  if (data.plot_data && data.plot_data.tt && data.plot_data.tt.length > 0) {
+    const pd = data.plot_data;
+    const phColors = xrdPhases.map((p, i) => p._plot_color || PHASE_COLORS[i % PHASE_COLORS.length]);
+
+    // Main traces: observed, calculated, background
+    const traces = [
+      { x: pd.tt, y: pd.y_obs, name: 'I_obs', type: 'scattergl',
+        mode: 'lines', line: { color: '#58a6ff', width: 1 } },
+      { x: pd.tt, y: pd.y_calc, name: 'I_calc', type: 'scattergl',
+        mode: 'lines', line: { color: '#ffffff', width: 1.2 } },
+      { x: pd.tt, y: pd.y_background, name: 'Background', type: 'scattergl',
+        mode: 'lines', line: { color: '#8b949e', width: 1, dash: 'dash' } },
+    ];
+
+    // Phase envelope traces (individual species contributions)
+    if (pd.phase_patterns && data.phase_results) {
+      for (let i = 0; i < pd.phase_patterns.length; i++) {
+        const pp = pd.phase_patterns[i];
+        const pr = data.phase_results[i] || {};
+        const col = phColors[i] || PHASE_COLORS[i % PHASE_COLORS.length];
+        const label = `${pr.name || 'Phase '+(i+1)} ${pr.spacegroup || ''}`.trim();
+        const wt = pr['weight_fraction_%'];
+        const wtStr = wt != null ? ` ${wt}%` : '';
+        // Add background to phase pattern for display (same as static plot)
+        const ppWithBg = pp.map((v, j) => v + (pd.y_background[j] || 0));
+        traces.push({
+          x: pd.tt, y: ppWithBg,
+          name: `${label}${wtStr}`,
+          type: 'scattergl', mode: 'lines',
+          line: { color: col, width: 1 },
+          fill: 'tonexty', fillcolor: col + '20',
+        });
+      }
+    }
+
+    // Residual trace (separate y-axis)
+    traces.push(
+      { x: pd.tt, y: pd.residuals, name: 'Residuals', type: 'scattergl',
+        mode: 'lines', line: { color: '#f0883e', width: 0.8 },
+        yaxis: 'y2' }
+    );
+
+    // Tick marks as shapes (vertical lines in the tick panel)
+    const shapes = [];
+    if (data.phase_results) {
+      const yTickBase = 0.21;  // just above residual panel
+      const yTickH = 0.03;
+      for (let i = 0; i < data.phase_results.length; i++) {
+        const pr = data.phase_results[i];
+        const col = phColors[i] || PHASE_COLORS[i % PHASE_COLORS.length];
+        const ticks = pr.tick_positions || [];
+        for (const tt of ticks) {
+          shapes.push({
+            type: 'line', xref: 'x', yref: 'paper',
+            x0: tt, x1: tt,
+            y0: yTickBase + i * yTickH,
+            y1: yTickBase + (i + 1) * yTickH,
+            line: { color: col, width: 1 },
+          });
+        }
+      }
+    }
+
+    const layout = {
+      paper_bgcolor: 'rgba(0,0,0,0)',
+      plot_bgcolor: '#161b22',
+      font: { color: '#c9d1d9', size: 11 },
+      margin: { l: 60, r: 20, t: 40, b: 50 },
+      title: { text: `${data.method || 'Refinement'} — Rwp=${data.statistics?.Rwp || '?'}%`,
+               font: { size: 13 } },
+      xaxis: { title: '2θ (degrees)', gridcolor: '#30363d', zeroline: false },
+      yaxis: { title: 'Intensity', gridcolor: '#30363d', zeroline: false,
+               domain: [0.28, 1.0] },
+      yaxis2: { title: 'Residual', gridcolor: '#30363d', zeroline: true,
+                zerolinecolor: '#58a6ff',
+                domain: [0.0, 0.18], anchor: 'x' },
+      legend: { x: 0.01, y: 0.99, bgcolor: 'rgba(22,27,34,0.8)',
+                font: { size: 10 } },
+      shapes: shapes,
+      dragmode: 'zoom',
+    };
+    const config = {
+      responsive: true,
+      displayModeBar: true,
+      modeBarButtonsToAdd: ['pan2d', 'zoomIn2d', 'zoomOut2d', 'autoScale2d'],
+      displaylogo: false,
+    };
+    interactivePlot.style.display = 'block';
+    plotEl.style.display = 'none';
+    Plotly.newPlot(interactivePlot, traces, layout, config);
+  } else if (data.plot_b64) {
+    // Static fallback
+    interactivePlot.style.display = 'none';
+    plotEl.src = 'data:image/png;base64,' + data.plot_b64;
+    plotEl.style.display = 'block';
+  }
+
+  // Downloads
+  document.getElementById('xrd-download-row').innerHTML = `
+    <button class="btn-sm green" onclick="openFolder('${escPath(data.output_dir)}')">📁 Open Folder</button>
+    <button class="btn-sm" onclick="downloadFile('${escPath(data.summary_path)}')">⬇ Summary Excel</button>`;
+
+  panel.scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+// ── Reset ───────────────────────────────────────────────────────────────────
+function resetXRD() {
+  xrdFile = null; xrdCandidates = []; xrdFiltered = []; xrdPhases = [];
+  xrdPhaseOptions = []; xrdLastResult = null; xrdLastFitSnapshot = null;
+  xrdBaselineFit = null; xrdActiveRecipeKey = null;
+
+  // Reset preview plot
+  _previewData = null; _stickPhases = [];
+  document.getElementById('xrd-preview-wrap').style.display = 'none';
+  document.getElementById('xrd-preview-overlay').style.display = 'flex';
+  document.getElementById('xrd-preview-overlay').textContent   = 'Loading preview…';
+  const canvas = document.getElementById('xrd-preview-canvas');
+  if (canvas) { const ctx = canvas.getContext('2d'); ctx.clearRect(0,0,canvas.width,canvas.height); }
+
+  // Reset dropzone
+  const dz = document.getElementById('xrd-dropzone');
+  dz.classList.remove('has-file', 'dragover');
+  dz.style.padding = '20px';
+  dz.style.minHeight = '90px';
+  document.getElementById('xrd-dropzone-content').innerHTML = `
+    <div style="display:flex;flex-direction:column;align-items:center;gap:8px;justify-content:center;padding:10px 0;">
+      <span style="font-size:40px;">📊</span>
+      <div class="dropzone-text" style="font-size:14px;font-weight:600;">Drag &amp; drop XRD data file</div>
+      <div class="dropzone-sub">.dat · .xy · .xye · .csv · .txt · or click to browse</div>
+    </div>`;
+  document.getElementById('xrdFileInput').value = '';
+
+  // Reset search UI
+  ['xrd-elements','xrd-phase-name','xrd-formula','xrd-filter',
+   'xrd-sample-id','xrd-output-dir'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  document.getElementById('xrd-candidates-wrap').style.display = 'none';
+  document.getElementById('xrd-selected-wrap').style.display = 'none';
+  document.getElementById('xrd-candidate-list').innerHTML = '';
+  document.getElementById('xrd-selected-phases').innerHTML = '';
+
+  // Hide results and errors
+  document.getElementById('xrd-results-panel').classList.remove('visible');
+  document.getElementById('xrd-error-box').classList.remove('visible');
+  document.getElementById('xrd-progress-wrap').classList.remove('visible');
+
+  setXrdStatus('Reset complete.', 'ok');
+  setTimeout(() => setXrdStatus('', 'ok'), 2000);
+}
+
+// ── UI helpers ──────────────────────────────────────────────────────────────
+function setXrdStatus(msg, type='info') {
+  const el = document.getElementById('xrd-search-status');
+  const colors = {info:'var(--muted)', ok:'var(--accent2)', warn:'var(--warn)', error:'var(--danger)'};
+  el.textContent = msg;
+  el.style.color = colors[type] || 'var(--muted)';
+}
+
+function showXrdError(msg) {
+  const el = document.getElementById('xrd-error-box');
+  el.textContent = msg;
+  el.classList.add('visible');
+  el.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+
+</script>
+</body>
+</html>

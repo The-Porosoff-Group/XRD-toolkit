@@ -1,0 +1,31 @@
+name: Methane Partial Oxidation (POM)
+description: CH4 + O2 → CO / CO2 / H2 / H2O (+ total oxidation)
+reactant: CH4
+internal_standard: Ar
+
+inlet_species:
+  - label: CH4
+    default_sccm: 10
+  - label: O2
+    default_sccm: 5
+  - label: Ar
+    default_sccm: 15
+
+species:
+  # TCD
+  Hydrogen:              { label: H2,        cn: 0, det: TCD }
+  Carbon Dioxide:        { label: CO2,       cn: 1, det: TCD }
+  Ar/O2:                 { label: Ar,        cn: 0, det: TCD }
+  Carbon Monoxide:       { label: CO,        cn: 1, det: TCD }
+  Oxygen:                { label: O2,        cn: 0, det: TCD }
+  Nitrogen:              { label: N2,        cn: 0, det: TCD }
+  Methane TCD:           { label: CH4_TCD,   cn: 1, det: TCD }
+  Ethane TCD:            { label: C2H6_TCD,  cn: 2, det: TCD }
+  Ethylene TCD:          { label: C2H4_TCD,  cn: 2, det: TCD }
+  # FID
+  Methane FID:           { label: CH4,       cn: 1, det: FID }
+  Ethane FID:            { label: C2H6,      cn: 2, det: FID }
+  Ethylene FID:          { label: C2H4,      cn: 2, det: FID }
+  Propane:               { label: C3H8,      cn: 3, det: FID }
+  Formaldehyde:          { label: HCHO,      cn: 1, det: FID }
+  Methanol:              { label: MeOH,      cn: 1, det: FID }

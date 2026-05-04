@@ -1,0 +1,22 @@
+# Catalysis Data Toolkit — Configuration
+# ─────────────────────────────────────────
+# Copy this file to config.yaml and fill in your values.
+# config.yaml is listed in .gitignore and will never be committed to GitHub.
+
+materials_project:
+  # Free API key from https://next-gen.materialsproject.org/api
+  # Sign in → dashboard → copy your API key
+  api_key: "YOUR_API_KEY_HERE"
+
+cache:
+  # Where to store downloaded CIF files between sessions.
+  # Defaults to a hidden folder in your home directory (~/.catalysis_toolkit_cache).
+  # Change this if you want the cache stored elsewhere.
+  directory: "~/.catalysis_toolkit_cache"
+  max_size_mb: 500
+
+performance:
+  # Maximum Le Bail outer iterations. 8-10 is enough for most samples.
+  max_outer_iterations: 10
+  # Pre-load pymatgen at startup to avoid a delay on the first refinement.
+  preload_pymatgen: true

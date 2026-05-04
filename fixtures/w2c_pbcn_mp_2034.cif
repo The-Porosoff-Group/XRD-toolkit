@@ -1,0 +1,60 @@
+# Canonical W2C (Pbcn, mp-2034) CIF for the catalysis toolkit.
+#
+# Provenance:
+#   - Source:    Materials Project mp-2034
+#   - Recipe:    pymatgen Structure.from_dict(MP_doc['structure'])
+#                -> CifWriter(struct, symprec=0.01)
+#   - Audit:     CLAUDE OUTPUTS/Catalysis-Toolkit/Catalysis-Toolkit_CIF-Audit_v1.md
+#   - Generated: 2026-05-01
+#
+# Why this is the canonical CIF:
+#   GSAS-II imports this as Pbcn (SG 60) with 2 atoms in the asymmetric
+#   unit and 8 symmetry operators. After symmetry expansion it gives
+#   12 atoms, matching the conventional Pbcn cell of W2C.
+#
+#   The CIF reduces the cell to 3 free cell parameters (a, b, c with
+#   alpha=beta=gamma=90 enforced) and 4 free fractional coordinates
+#   (1 W asym site + 1 C asym site, each with 1 free Wyckoff parameter).
+#   A P1 import of the same structure would give GSAS-II 6 cell DoF +
+#   36 XYZ DoF, which diverges with broad nanocrystalline peaks.
+#
+#   Variants B, C, and D from the audit are byte-identical and all reduce
+#   to this CIF. Variant A (P1, 12 explicit atoms) is what the retired
+#   mp_w2c_pbcn_compat policy used to ship; do not use it.
+#
+# DO NOT EDIT BY HAND. To regenerate, see fetch_w2c_audit_cifs.py.
+
+data_W2C
+_symmetry_space_group_name_H-M   Pbcn
+_cell_length_a   4.75632200
+_cell_length_b   6.11103400
+_cell_length_c   5.23726500
+_cell_angle_alpha   90.00000000
+_cell_angle_beta   90.00000000
+_cell_angle_gamma   90.00000000
+_symmetry_Int_Tables_number   60
+_chemical_formula_structural   W2C
+_chemical_formula_sum   'W8 C4'
+_cell_volume   152.22658256
+_cell_formula_units_Z   4
+loop_
+ _symmetry_equiv_pos_site_id
+ _symmetry_equiv_pos_as_xyz
+  1  'x, y, z'
+  2  '-x, -y, -z'
+  3  '-x+1/2, -y+1/2, z+1/2'
+  4  'x+1/2, y+1/2, -z+1/2'
+  5  'x+1/2, -y+1/2, -z'
+  6  '-x+1/2, y+1/2, z'
+  7  '-x, y, -z+1/2'
+  8  'x, -y, z+1/2'
+loop_
+ _atom_site_type_symbol
+ _atom_site_label
+ _atom_site_symmetry_multiplicity
+ _atom_site_fract_x
+ _atom_site_fract_y
+ _atom_site_fract_z
+ _atom_site_occupancy
+  W  W0  8  0.24480500  0.12358000  0.08118700  1
+  C  C1  4  0.00000000  0.37825000  0.25000000  1

@@ -1,0 +1,34 @@
+name: CO2 Hydrogenation
+description: CO2 + H2 → CH4 / MeOH / CO / hydrocarbons
+reactant: CO2
+internal_standard: Ar
+
+inlet_species:
+  - label: CO2
+    default_sccm: 10
+  - label: H2
+    default_sccm: 40
+  - label: Ar
+    default_sccm: 15
+
+species:
+  # TCD
+  Hydrogen:              { label: H2,        cn: 0, det: TCD }
+  Carbon Dioxide:        { label: CO2,       cn: 1, det: TCD }
+  Ar/O2:                 { label: Ar,        cn: 0, det: TCD }
+  Carbon Monoxide:       { label: CO,        cn: 1, det: TCD }
+  Nitrogen:              { label: N2,        cn: 0, det: TCD }
+  Methane TCD:           { label: CH4_TCD,   cn: 1, det: TCD }
+  Ethane TCD:            { label: C2H6_TCD,  cn: 2, det: TCD }
+  Ethylene TCD:          { label: C2H4_TCD,  cn: 2, det: TCD }
+  # FID
+  Methane FID:           { label: CH4,       cn: 1, det: FID }
+  Ethane FID:            { label: C2H6,      cn: 2, det: FID }
+  Ethylene FID:          { label: C2H4,      cn: 2, det: FID }
+  Propane:               { label: C3H8,      cn: 3, det: FID }
+  Propylene:             { label: C3H6,      cn: 3, det: FID }
+  Methanol:              { label: MeOH,      cn: 1, det: FID }
+  Ethanol:               { label: EtOH,      cn: 2, det: FID }
+  DME:                   { label: DME,       cn: 2, det: FID }
+  Butane:                { label: nC4H10,    cn: 4, det: FID }
+  iso-pentane:           { label: iC5H12,    cn: 5, det: FID }

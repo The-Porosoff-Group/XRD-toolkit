@@ -1,0 +1,22 @@
+name: CO Oxidation
+description: CO + 1/2 O2 → CO2
+reactant: CO
+internal_standard: Ar
+
+inlet_species:
+  - label: CO
+    default_sccm: 5
+  - label: O2
+    default_sccm: 5
+  - label: Ar
+    default_sccm: 40
+
+species:
+  # TCD only — no FID species expected for CO oxidation
+  Hydrogen:              { label: H2,        cn: 0, det: TCD }
+  Carbon Dioxide:        { label: CO2,       cn: 1, det: TCD }
+  Ar/O2:                 { label: Ar,        cn: 0, det: TCD }
+  Carbon Monoxide:       { label: CO,        cn: 1, det: TCD }
+  Oxygen:                { label: O2,        cn: 0, det: TCD }
+  Nitrogen:              { label: N2,        cn: 0, det: TCD }
+  Methane TCD:           { label: CH4_TCD,   cn: 1, det: TCD }
