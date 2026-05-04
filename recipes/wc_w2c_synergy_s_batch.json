@@ -1,0 +1,46 @@
+{
+  "id": "wc_w2c_synergy_s_batch",
+  "name": "WC/W2C Synergy-S batch recipe",
+  "description": "Terminal recipe matching the GUI WC/W2C production defaults. Supply phases via --cif-dir, --cif, --mp-ids, or a GUI preset with saved phases.",
+  "method": "gsas2",
+  "controls": {
+    "wavelength": "1.54056",
+    "tt_min": "20",
+    "tt_max": "60",
+    "n_bg_coeffs": "auto",
+    "instrument": "synergy_s",
+    "fix_y_value": "",
+    "checkboxes": {
+      "xrd-calibration-mode": false,
+      "xrd-verification-mode": true,
+      "xrd-verify-cell": true,
+      "xrd-phase-isolation": true,
+      "xrd-zero-not-disp": true,
+      "xrd-refine-x": true,
+      "xrd-fix-y": false,
+      "xrd-y-nonneg": true,
+      "xrd-refine-uiso": false,
+      "xrd-refine-xyz": false
+    }
+  },
+  "phase_option_rules": [
+    {
+      "match": "WC",
+      "refine_size": false,
+      "refine_mustrain": false,
+      "po_mode": "fixed",
+      "po_axis": [0, 0, 1],
+      "po_value": 0.905,
+      "uniform_cell": false
+    },
+    {
+      "match": "W2C",
+      "refine_size": false,
+      "refine_mustrain": false,
+      "po_mode": "off",
+      "po_axis": [0, 0, 1],
+      "po_value": 1.0,
+      "uniform_cell": false
+    }
+  ]
+}
