@@ -496,8 +496,10 @@ def generate_reflections(a, b, c, al, be, ga, system, spacegroup_number,
 
     site_policy controls how sites are used for structure factor F²:
       'auto' (default) — expand asymmetric unit by symmetry before F²
-      'legacy_direct_sites' — use sites directly (old behavior, for
-          phases like MP W2C Pbcn where expansion corrupts coordinates)
+      'legacy_direct_sites' — use sites directly, while still applying the
+          SG absence filter
+      'direct_full_cell_sites' — use sites directly and let their structure
+          factors encode extinctions without SG pre-filtering
       'structure_expanded' — always expand (same as auto)
 
     If `sites` is provided (list of (element, x, y, z, occupancy) tuples),
@@ -520,14 +522,21 @@ def generate_reflections(a, b, c, al, be, ga, system, spacegroup_number,
     #   'auto'/'structure_expanded' — expand (default, needed for Si etc.)
     #   'legacy_direct_sites' — use sites directly (MP W2C Pbcn compat)
     full_sites = None
-    direct_full_cell_sites = (sites is not None
-                              and site_policy == 'legacy_direct_sites')
+    direct_full_cell_sites = (
+        sites is not None
+        and site_policy in ('direct_full_cell_sites', 'source_full_cell')
+    )
+    use_direct_sites = (
+        sites is not None
+        and site_policy in ('legacy_direct_sites',
+                            'direct_full_cell_sites',
+                            'source_full_cell')
+    )
     if sites is not None:
-        if direct_full_cell_sites:
-            # Use sites as-is. This is used for P1/full-cell MP CIFs where
-            # atom positions already encode systematic extinctions in the
-            # source setting; applying a separate SG absence table can remove
-            # real reflections when that setting differs from the ITA standard.
+        if use_direct_sites:
+            # Use sites as-is. legacy_direct_sites still applies the SG absence
+            # filter. direct_full_cell_sites is for source/conventional cells
+            # whose atom positions should decide extinctions directly.
             full_sites = sites
         elif spacegroup_number > 1:
             full_sites = _expand_sites_by_symmetry(

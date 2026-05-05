@@ -53,6 +53,64 @@ SORT_OPTIONS = {
 }
 
 
+_F_CUBIC_SGS = {196, 202, 203, 209, 210, 216, 219, 225, 226, 227, 228}
+
+
+def _nearly_equal(a, b, tol=1e-3):
+    try:
+        return abs(float(a) - float(b)) <= tol
+    except Exception:
+        return False
+
+
+def _looks_like_f_cubic_primitive_cell(a, b, c, al, be, ga, sg):
+    """Detect the rhombohedral primitive cell often returned for F-cubic MP data."""
+    return (
+        int(sg or 0) in _F_CUBIC_SGS
+        and _nearly_equal(a, b)
+        and _nearly_equal(a, c)
+        and _nearly_equal(al, 60.0, 1e-2)
+        and _nearly_equal(be, 60.0, 1e-2)
+        and _nearly_equal(ga, 60.0, 1e-2)
+    )
+
+
+def _f_cubic_primitive_to_conventional(a_prim, primitive_sites):
+    """Convert an F-cubic primitive/rhombohedral cell to conventional sites.
+
+    MP can return rock-salt/cF structures as a two-atom P1 primitive cell
+    with a=b=c and alpha=beta=gamma=60. The UI tick generator, however,
+    labels and spaces Fm-3m reflections in the conventional cubic setting.
+    """
+    if not primitive_sites:
+        return None, None
+    conv_a = float(a_prim) * math.sqrt(2.0)
+    f_trans = [
+        (0.0, 0.0, 0.0),
+        (0.0, 0.5, 0.5),
+        (0.5, 0.0, 0.5),
+        (0.5, 0.5, 0.0),
+    ]
+    conv_sites = []
+    seen = set()
+    for el, u, v, w, occ in primitive_sites:
+        # Primitive F basis vectors in conventional coordinates:
+        # a_p=(0,1/2,1/2), b_p=(1/2,0,1/2), c_p=(1/2,1/2,0).
+        x0 = (float(v) + float(w)) / 2.0
+        y0 = (float(u) + float(w)) / 2.0
+        z0 = (float(u) + float(v)) / 2.0
+        for tx, ty, tz in f_trans:
+            x = (x0 + tx) % 1.0
+            y = (y0 + ty) % 1.0
+            z = (z0 + tz) % 1.0
+            key = (el, round(x, 6), round(y, 6), round(z, 6))
+            if key in seen:
+                continue
+            seen.add(key)
+            conv_sites.append((el, x, y, z, occ))
+    return conv_a, conv_sites
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SEARCH
 # ─────────────────────────────────────────────────────────────────────────────
@@ -370,7 +428,17 @@ def get_stick_pattern(structure, wavelength, tt_min=5.0, tt_max=90.0):
             raw_sites = []
             raw_sg = 1
 
-        if _sp == 'legacy_direct_sites':
+        if (raw_sg == 1
+                and _looks_like_f_cubic_primitive_cell(a, b, c, al, be, ga, sg)
+                and raw_sites):
+            conv_a, conv_sites = _f_cubic_primitive_to_conventional(a, raw_sites)
+            if conv_a and conv_sites:
+                a = b = c = conv_a
+                al = be = ga = 90.0
+                sys_ = 'cubic'
+                sites = conv_sites
+                _sp = 'direct_full_cell_sites'
+        elif _sp == 'legacy_direct_sites':
             sites = raw_sites or sites
         elif raw_sg > 1:
             # Symmetry-bearing CIFs list the asymmetric unit. Let the
@@ -383,7 +451,15 @@ def get_stick_pattern(structure, wavelength, tt_min=5.0, tt_max=90.0):
             # the selected phase SG for reflection-condition filtering.
             sites = expand_sites_from_cif(cif_text) or raw_sites or None
             if sites:
-                _sp = 'legacy_direct_sites'
+                if (int(sg or 0) == 60
+                        and (sys_ or '').lower() == 'orthorhombic'
+                        and _nearly_equal(al, 90.0)
+                        and _nearly_equal(be, 90.0)
+                        and _nearly_equal(ga, 90.0)
+                        and len(sites) >= 8):
+                    _sp = 'direct_full_cell_sites'
+                else:
+                    _sp = 'legacy_direct_sites'
 
     # If we still have no sites, try building from formula + cell.
     # BUT: refuse to fabricate approximate sites for W2C Pbcn —
