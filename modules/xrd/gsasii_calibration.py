@@ -128,10 +128,26 @@ def run_calibration(tt, y_obs, sigma, phase, wavelength,
                 INSTRUMENT_PROFILES[DEFAULT_INSTRUMENT])
     if polariz is None:
         polariz = profile.get('polariz', 0.5)
+    allow_x = bool(profile.get('calibration_allow_x', True))
+    allow_y = bool(profile.get('calibration_allow_y', True))
+    refine_sh_l = bool(profile.get('calibration_refine_sh_l', True))
+    fixed_sh_l = float(profile.get('calibration_fixed_sh_l',
+                                   _CAL_DEFAULTS['SH/L']))
+    u_min_gain = float(profile.get('calibration_u_min_rwp_gain', 0.5))
+    v_min_gain = float(profile.get('calibration_v_min_rwp_gain', 0.3))
 
     print(f"  *** INSTRUMENT CALIBRATION MODE ***", flush=True)
     print(f"  Instrument: {profile['label']}", flush=True)
     print(f"  Polariz: {polariz}", flush=True)
+    if not allow_x:
+        print("  Calibration policy: X broadening fixed at 0.0",
+              flush=True)
+    if not allow_y:
+        print("  Calibration policy: Y broadening fixed at 0.0",
+              flush=True)
+    if not refine_sh_l:
+        print(f"  Calibration policy: SH/L fixed at {fixed_sh_l:.5f}",
+              flush=True)
     print(f"  Cell: FIXED (certified standard)", flush=True)
     print(f"  Strategy: conservative trial-based with rollback", flush=True)
 
@@ -242,7 +258,7 @@ Si1  Si  0.12500  0.12500  0.12500  1.0
             for k in ['U', 'V', 'W', 'X', 'Y']:
                 f.write(f"{k}:{_CAL_DEFAULTS[k]}\n")
             f.write("Z:0.0\n")
-            f.write(f"SH/L:{_CAL_DEFAULTS['SH/L']}\n")
+            f.write(f"SH/L:{fixed_sh_l}\n")
             f.write("Azimuth:0.0\n")
 
         # ── Create project ─────────────────────────────────────────────
@@ -505,7 +521,7 @@ Si1  Si  0.12500  0.12500  0.12500  1.0
             progress_callback('Calibration: trying U...')
         u_ok, _, u_ckpt = _trial(
             "Trial A (UW)", ['U', 'W', 'Zero'],
-            ckpt_from=gauss_ckpt, min_rwp_gain=0.5)
+            ckpt_from=gauss_ckpt, min_rwp_gain=u_min_gain)
         if u_ok:
             gauss_ckpt = u_ckpt
 
@@ -516,7 +532,7 @@ Si1  Si  0.12500  0.12500  0.12500  1.0
                 progress_callback('Calibration: trying V...')
             v_ok, _, v_ckpt = _trial(
                 "Trial B (UVW)", ['U', 'V', 'W', 'Zero'],
-                ckpt_from=gauss_ckpt, min_rwp_gain=0.3)
+                ckpt_from=gauss_ckpt, min_rwp_gain=v_min_gain)
             if v_ok:
                 gauss_ckpt = v_ckpt
 
@@ -544,17 +560,27 @@ Si1  Si  0.12500  0.12500  0.12500  1.0
         print("\n    --- Lorentzian trials from Gaussian state "
               f"({', '.join(_gauss)}) ---", flush=True)
 
-        x1_ok, rwp_x1, x1_ckpt = _trial(
-            "Trial C1 (gauss+X)", _gauss + ['X'],
-            ckpt_from=gauss_ckpt, min_rwp_gain=0.1)
-        if x1_ok:
-            _candidates.append(('gauss+X', rwp_x1, x1_ckpt, True, _gauss))
+        if allow_x:
+            x1_ok, rwp_x1, x1_ckpt = _trial(
+                "Trial C1 (gauss+X)", _gauss + ['X'],
+                ckpt_from=gauss_ckpt, min_rwp_gain=0.1)
+            if x1_ok:
+                _candidates.append(('gauss+X', rwp_x1, x1_ckpt, True,
+                                    _gauss))
+        else:
+            print("    Trial C1 (gauss+X): skipped by instrument policy",
+                  flush=True)
 
-        y1_ok, rwp_y1, y1_ckpt = _trial(
-            "Trial D1 (gauss+Y)", _gauss + ['Y'],
-            ckpt_from=gauss_ckpt, min_rwp_gain=0.1)
-        if y1_ok:
-            _candidates.append(('gauss+Y', rwp_y1, y1_ckpt, False, _gauss))
+        if allow_y:
+            y1_ok, rwp_y1, y1_ckpt = _trial(
+                "Trial D1 (gauss+Y)", _gauss + ['Y'],
+                ckpt_from=gauss_ckpt, min_rwp_gain=0.1)
+            if y1_ok:
+                _candidates.append(('gauss+Y', rwp_y1, y1_ckpt, False,
+                                    _gauss))
+        else:
+            print("    Trial D1 (gauss+Y): skipped by instrument policy",
+                  flush=True)
 
         # Also try X and Y from W-only baseline (U=0)
         if u_ok:
@@ -564,19 +590,27 @@ Si1  Si  0.12500  0.12500  0.12500  1.0
             print(f"\n    --- Lorentzian trials from W-only baseline ---",
                   flush=True)
 
-            x2_ok, rwp_x2, x2_ckpt = _trial(
-                "Trial C2 (W+X)", _base_gauss + ['X'],
-                ckpt_from=baseline_ckpt, min_rwp_gain=0.1)
-            if x2_ok:
-                _candidates.append(('W+X', rwp_x2, x2_ckpt, True,
-                                    _base_gauss))
+            if allow_x:
+                x2_ok, rwp_x2, x2_ckpt = _trial(
+                    "Trial C2 (W+X)", _base_gauss + ['X'],
+                    ckpt_from=baseline_ckpt, min_rwp_gain=0.1)
+                if x2_ok:
+                    _candidates.append(('W+X', rwp_x2, x2_ckpt, True,
+                                        _base_gauss))
+            else:
+                print("    Trial C2 (W+X): skipped by instrument policy",
+                      flush=True)
 
-            y2_ok, rwp_y2, y2_ckpt = _trial(
-                "Trial D2 (W+Y)", _base_gauss + ['Y'],
-                ckpt_from=baseline_ckpt, min_rwp_gain=0.1)
-            if y2_ok:
-                _candidates.append(('W+Y', rwp_y2, y2_ckpt, False,
-                                    _base_gauss))
+            if allow_y:
+                y2_ok, rwp_y2, y2_ckpt = _trial(
+                    "Trial D2 (W+Y)", _base_gauss + ['Y'],
+                    ckpt_from=baseline_ckpt, min_rwp_gain=0.1)
+                if y2_ok:
+                    _candidates.append(('W+Y', rwp_y2, y2_ckpt, False,
+                                        _base_gauss))
+            else:
+                print("    Trial D2 (W+Y): skipped by instrument policy",
+                      flush=True)
 
         # Also keep the Gaussian-only option as a candidate
         _candidates.append(('Gaussian only', _get_rwp(), gauss_ckpt,
@@ -601,7 +635,7 @@ Si1  Si  0.12500  0.12500  0.12500  1.0
         lor_ckpt = _checkpoint('pre_shl')
 
         # Trial E: SH/L (only if data below 30° and meaningful)
-        if tt_min < 30.0:
+        if refine_sh_l and tt_min < 30.0:
             if progress_callback:
                 progress_callback('Calibration: trying SH/L...')
             _lor = ['X'] if _use_X else (['Y'] if y_ok else [])
@@ -618,10 +652,15 @@ Si1  Si  0.12500  0.12500  0.12500  1.0
                     _restore(shl_ckpt)
             # If rejected, _trial already restored lor_ckpt
         else:
-            print("    SH/L: skipped (no data below 30°)", flush=True)
+            if not refine_sh_l:
+                print("    SH/L: skipped by instrument policy", flush=True)
+            else:
+                print("    SH/L: skipped (no data below 30°)", flush=True)
 
         # ── Extract final parameters ───────────────────────────────────
         params = _current_params()
+        if not refine_sh_l:
+            params['SH/L'] = fixed_sh_l
 
         # Zero out unused Lorentzian
         if _use_X:

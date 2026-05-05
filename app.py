@@ -922,7 +922,13 @@ def process_xrd():
             # Instrument from form (or auto-detect)
             _cal_instrument = form.get('instrument', '').strip().lower()
             if _cal_instrument in ('', 'auto'):
-                _cal_instrument = None  # let run_calibration auto-detect
+                from modules.xrd.gsasii_backend import infer_instrument
+                _cal_instrument, _cal_reason = infer_instrument(
+                    filepath=upload_path,
+                    metadata={'sample_id': sample_id, 'notes': notes},
+                )
+                print(f"  Calibration instrument auto-detected: "
+                      f"{_cal_instrument} ({_cal_reason})", flush=True)
 
             cal_result = run_calibration(
                 tt=data['tt'], y_obs=data['intensity'],

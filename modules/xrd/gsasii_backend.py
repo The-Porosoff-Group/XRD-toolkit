@@ -225,8 +225,14 @@ INSTRUMENT_PROFILES = {
         'geometry': 'bragg_brentano',
         'displacement_param': 'DisplaceX',
         'zero_seed': -0.027,   # measured from NIST Si 640g
-        'polariz':  0.5,       # Kβ-filtered, no monochromator
-        'sh_l':     0.005,     # measured from NIST Si 640g
+        'polariz':  0.7,       # SmartLab manual calibration profile
+        'sh_l':     0.002,     # SmartLab manual calibration profile
+        'calibration_allow_x': False,
+        'calibration_allow_y': False,
+        'calibration_refine_sh_l': False,
+        'calibration_fixed_sh_l': 0.002,
+        'calibration_u_min_rwp_gain': 0.0,
+        'calibration_v_min_rwp_gain': 0.0,
         'preferred_orientation_default': 'auto',
         'sigma_inflation_K': 1.0,  # σ ≈ √I is already correct for BB
         'instprm_filename': 'smartlab_Si640g.instprm',  # auto-locate
