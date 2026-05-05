@@ -520,12 +520,16 @@ def generate_reflections(a, b, c, al, be, ga, system, spacegroup_number,
     #   'auto'/'structure_expanded' — expand (default, needed for Si etc.)
     #   'legacy_direct_sites' — use sites directly (MP W2C Pbcn compat)
     full_sites = None
-    if sites is not None and spacegroup_number > 1:
-        if site_policy == 'legacy_direct_sites':
-            # Use sites as-is — caller guarantees they're full-cell
-            # or the old F² calculation was working with them directly.
+    direct_full_cell_sites = (sites is not None
+                              and site_policy == 'legacy_direct_sites')
+    if sites is not None:
+        if direct_full_cell_sites:
+            # Use sites as-is. This is used for P1/full-cell MP CIFs where
+            # atom positions already encode systematic extinctions in the
+            # source setting; applying a separate SG absence table can remove
+            # real reflections when that setting differs from the ITA standard.
             full_sites = sites
-        else:
+        elif spacegroup_number > 1:
             full_sites = _expand_sites_by_symmetry(
                 sites, spacegroup_number, a, b, c, al, be, ga)
             if full_sites is None:
@@ -549,7 +553,8 @@ def generate_reflections(a, b, c, al, be, ga, system, spacegroup_number,
                 if h == 0 and k == 0 and l == 0:
                     continue
 
-                if not is_allowed(h, k, l, spacegroup_number):
+                if (not direct_full_cell_sites
+                        and not is_allowed(h, k, l, spacegroup_number)):
                     continue
 
                 d = d_spacing(h, k, l, a, b, c, al, be, ga, system)
