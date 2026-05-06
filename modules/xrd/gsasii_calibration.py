@@ -157,6 +157,165 @@ def _solve_3x3(M, b):
     return np.array(y, dtype=float)
 
 
+_NP_LINALG_INV_PATCHED = False
+_GSAS_PINV_PATCHED = False
+
+
+def _invert_small_matrix(mat):
+    """Pure-Python Gauss-Jordan inverse for small square matrices."""
+    arr = np.asarray(mat, dtype=float)
+    if arr.ndim != 2 or arr.shape[0] != arr.shape[1]:
+        raise ValueError("matrix must be square")
+    n = arr.shape[0]
+    A = [[float(arr[i, j]) for j in range(n)] for i in range(n)]
+    I = [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+    for col in range(n):
+        pivot = max(range(col, n), key=lambda r: abs(A[r][col]))
+        if abs(A[pivot][col]) < 1e-15:
+            raise ValueError("singular matrix")
+        if pivot != col:
+            A[col], A[pivot] = A[pivot], A[col]
+            I[col], I[pivot] = I[pivot], I[col]
+        piv = A[col][col]
+        for j in range(n):
+            A[col][j] /= piv
+            I[col][j] /= piv
+        for r in range(n):
+            if r == col:
+                continue
+            factor = A[r][col]
+            if factor == 0:
+                continue
+            for j in range(n):
+                A[r][j] -= factor * A[col][j]
+                I[r][j] -= factor * I[col][j]
+    return np.array(I, dtype=float)
+
+
+def _det_small_matrix(mat):
+    """Pure-Python determinant for small square matrices."""
+    arr = np.asarray(mat, dtype=float)
+    if arr.ndim != 2 or arr.shape[0] != arr.shape[1]:
+        raise ValueError("matrix must be square")
+    n = arr.shape[0]
+    A = [[float(arr[i, j]) for j in range(n)] for i in range(n)]
+    det = 1.0
+    sign = 1.0
+    for col in range(n):
+        pivot = max(range(col, n), key=lambda r: abs(A[r][col]))
+        if abs(A[pivot][col]) < 1e-15:
+            return 0.0
+        if pivot != col:
+            A[col], A[pivot] = A[pivot], A[col]
+            sign *= -1.0
+        piv = A[col][col]
+        det *= piv
+        for r in range(col + 1, n):
+            factor = A[r][col] / piv
+            for j in range(col, n):
+                A[r][j] -= factor * A[col][j]
+    return sign * det
+
+
+def _inner_small(a, b):
+    """Pure-Python np.inner equivalent for small last-axis dot products."""
+    A = np.asarray(a, dtype=float)
+    B = np.asarray(b, dtype=float)
+    if A.ndim == 0 or B.ndim == 0:
+        return A * B
+    if A.shape[-1] != B.shape[-1]:
+        raise ValueError("shapes are not aligned for inner product")
+    k = A.shape[-1]
+    a_prefix = A.shape[:-1]
+    b_prefix = B.shape[:-1]
+    A2 = A.reshape((-1, k))
+    B2 = B.reshape((-1, k))
+    out = np.empty((A2.shape[0], B2.shape[0]), dtype=float)
+    for i in range(A2.shape[0]):
+        ai = A2[i]
+        for j in range(B2.shape[0]):
+            bj = B2[j]
+            s = 0.0
+            for q in range(k):
+                s += float(ai[q]) * float(bj[q])
+            out[i, j] = s
+    out = out.reshape(a_prefix + b_prefix)
+    if out.shape == ():
+        return float(out)
+    return out
+
+
+def _install_safe_numpy_inv_for_gsas():
+    """Avoid a local Windows LAPACK crash in GSAS-II lattice setup.
+
+    The local NumPy stack can raise a fatal Windows exception inside
+    numpy.linalg.inv when GSAS-II builds cell metric tensors. For calibration
+    those are small matrices, so use a pure-Python inverse for small square
+    matrices and leave larger cases to NumPy.
+    """
+    global _NP_LINALG_INV_PATCHED
+    if _NP_LINALG_INV_PATCHED:
+        return
+    original_inv = np.linalg.inv
+    original_det = np.linalg.det
+    original_inner = np.inner
+
+    def _safe_inv(a):
+        arr = np.asarray(a, dtype=float)
+        if arr.ndim == 2 and arr.shape[0] == arr.shape[1] and arr.shape[0] <= 12:
+            return _invert_small_matrix(arr)
+        return original_inv(a)
+
+    def _safe_det(a):
+        arr = np.asarray(a, dtype=float)
+        if arr.ndim == 2 and arr.shape[0] == arr.shape[1] and arr.shape[0] <= 12:
+            return _det_small_matrix(arr)
+        return original_det(a)
+
+    def _safe_inner(a, b):
+        A = np.asarray(a)
+        B = np.asarray(b)
+        if (A.ndim > 0 and B.ndim > 0 and A.shape[-1] == B.shape[-1]
+                and int(np.prod(A.shape[:-1] or (1,))
+                        * np.prod(B.shape[:-1] or (1,))) <= 1000000):
+            return _inner_small(A, B)
+        return original_inner(a, b)
+
+    np.linalg.inv = _safe_inv
+    np.linalg.det = _safe_det
+    np.inner = _safe_inner
+    _NP_LINALG_INV_PATCHED = True
+
+
+def _install_safe_gsas_pinv():
+    """Patch GSAS-II pinv to avoid local NumPy SVD crashes in calibration."""
+    global _GSAS_PINV_PATCHED
+    if _GSAS_PINV_PATCHED:
+        return
+    try:
+        from GSASII import GSASIImath as G2mth
+    except ImportError:
+        import GSASIImath as G2mth
+
+    def _safe_pinv(a, rcond=1e-15):
+        arr = np.asarray(a, dtype=float)
+        if arr.ndim != 2 or arr.shape[0] != arr.shape[1]:
+            raise ValueError("calibration pinv expects a square Hessian")
+        n = arr.shape[0]
+        eye = np.eye(n, dtype=float)
+        scales = [0.0, 1e-12, 1e-10, 1e-8, 1e-6]
+        for scale in scales:
+            try:
+                mat = arr + eye * scale if scale else arr
+                return _invert_small_matrix(mat), (0 if scale == 0 else 1)
+            except Exception:
+                continue
+        raise ValueError("calibration Hessian is singular")
+
+    G2mth.pinv = _safe_pinv
+    _GSAS_PINV_PATCHED = True
+
+
 def _weighted_linear3(c0, c1, c2, y, inv_w):
     w2 = inv_w * inv_w
     cols = [c0, c1, c2]
@@ -562,7 +721,7 @@ def _profile_plausible(params, tt_check=None):
     tan_t = np.tan(np.radians(tt_check / 2.0))
     hg2 = U * tan_t**2 + V * tan_t + W
     if np.nanmin(hg2) <= 0:
-        return False, f"FWHM²_G non-positive at 2θ={tt_check[np.argmin(hg2)]:.1f}°"
+        return False, f"FWHM_G^2 non-positive at 2theta={tt_check[np.argmin(hg2)]:.1f} deg"
 
     # Broad guardrails — not fundamental constants, just sanity bounds
     if abs(U) > 1000:
@@ -603,30 +762,19 @@ def run_calibration(tt, y_obs, sigma, phase, wavelength,
 
     Returns dict with 'instprm_path', 'params', 'Rwp', plot arrays, etc.
     """
-    # Default path for Si SRM 640g standards: local peak metrology with
-    # candidate-profile output. This keeps the production instrument profile
-    # protected and avoids the unstable global GSAS parameter tradeoffs.
-    _sg = int((phase or {}).get('spacegroup_number', 0) or 0)
-    _inst = (instrument or DEFAULT_INSTRUMENT or '').lower()
-    if _sg == 227 or _inst == 'smartlab':
-        return run_silicon_profile_calibration(
-            tt, y_obs, sigma, phase, wavelength,
-            tt_min=tt_min, tt_max=tt_max, n_bg_coeffs=n_bg_coeffs,
-            polariz=polariz, instrument=instrument,
-            output_instprm=output_instprm,
-            progress_callback=progress_callback,
-            keep_workdir=keep_workdir)
-
     if not _GSASII_AVAILABLE:
         raise RuntimeError(f"GSAS-II not available: {_GSASII_IMPORT_ERROR}")
 
+    _install_safe_numpy_inv_for_gsas()
     _add_gsas2pkg_paths()
     try:
-        import GSASIIscriptable as G2sc
-    except ImportError:
         from GSASII import GSASIIscriptable as G2sc
+    except ImportError:
+        import GSASIIscriptable as G2sc
+    _install_safe_gsas_pinv()
 
-    # ── Resolve output path early and back up existing file ────────────
+    # Resolve output path early. Calibration writes a candidate profile only;
+    # the production .instprm is protected until a user explicitly promotes it.
     instrument = instrument or DEFAULT_INSTRUMENT
     _toolkit_root = os.path.dirname(os.path.dirname(
         os.path.dirname(os.path.abspath(__file__))))
@@ -637,9 +785,16 @@ def run_calibration(tt, y_obs, sigma, phase, wavelength,
                                 f'{instrument}_Si640g.instprm')
         output_instprm = os.path.join(_toolkit_root, _fname)
 
-    if os.path.isfile(output_instprm):
-        print(f"  Existing .instprm found: {output_instprm} "
-              f"(will be backed up before overwrite)", flush=True)
+    production_instprm = output_instprm
+    candidate_instprm = _instprm_candidate_path(production_instprm)
+    report_json = os.path.splitext(candidate_instprm)[0] + '_report.json'
+    report_txt = os.path.splitext(candidate_instprm)[0] + '_report.txt'
+
+    if os.path.isfile(production_instprm):
+        print(f"  Existing .instprm protected: {production_instprm}",
+              flush=True)
+    print(f"  Candidate .instprm will be written: {candidate_instprm}",
+          flush=True)
 
     # ── Resolve instrument profile ─────────────────────────────────────
     profile = INSTRUMENT_PROFILES.get(instrument,
@@ -717,6 +872,8 @@ def run_calibration(tt, y_obs, sigma, phase, wavelength,
         # For Fd-3m (#227), write a known-good CIF with setting 2
         if _sg_num == 227:
             _cif_out = f"""data_calibration_standard
+_chemical_formula_sum 'Si'
+_cell_formula_units_Z 8
 _cell_length_a {_a}
 _cell_length_b {_a}
 _cell_length_c {_a}
@@ -724,7 +881,9 @@ _cell_angle_alpha 90.0
 _cell_angle_beta 90.0
 _cell_angle_gamma 90.0
 _symmetry_Int_Tables_number 227
-_symmetry_space_group_name_H-M 'F d -3 m :2'
+_symmetry_space_group_name_H-M 'F d -3 m'
+_space_group_IT_number 227
+_space_group_name_H-M_alt 'F d -3 m'
 loop_
 _atom_site_label
 _atom_site_type_symbol
@@ -798,7 +957,7 @@ Si1  Si  0.12500  0.12500  0.12500  1.0
             progress_callback('Calibration: adding standard phase...')
         print("  Adding phase...", flush=True)
         phase_obj = gpx.add_phase(cif_path, phasename='Standard',
-                                   histograms=[histogram])
+                                  histograms=[histogram])
         if isinstance(phase_obj, list):
             phase_obj = phase_obj[0]
         print(f"  Phase: {phase_obj.name}", flush=True)
@@ -940,6 +1099,59 @@ Si1  Si  0.12500  0.12500  0.12500  1.0
                 print(f"      (diagnostic failed: {_de})", flush=True)
             return rwp
 
+        def _trial_correlation_problem(inst_params, threshold=95.0):
+            """Return a reason if the latest GSAS-II .lst reports high
+            correlation among newly refined instrument parameters."""
+            params_set = set(inst_params or [])
+            try:
+                cov_data = gpx.data.get('Covariance', {}).get('data', {})
+                vary = cov_data.get('varyList', []) or []
+                cov = np.asarray(cov_data.get('covMatrix'), dtype=float)
+                wanted = {}
+                for idx, name in enumerate(vary):
+                    key = str(name).split(':')[-1]
+                    if key in params_set:
+                        wanted[key] = idx
+                for i, pa in enumerate(sorted(wanted)):
+                    ia = wanted[pa]
+                    for pb in sorted(wanted)[i + 1:]:
+                        ib = wanted[pb]
+                        denom = math.sqrt(abs(float(cov[ia, ia] * cov[ib, ib])))
+                        if denom <= 0:
+                            continue
+                        corr = abs(float(cov[ia, ib]) / denom) * 100.0
+                        if corr >= threshold:
+                            return (f"{pa}/{pb} correlation {corr:.2f}% exceeds "
+                                    f"{threshold:.1f}%")
+            except Exception:
+                pass
+
+            lst_path = os.path.splitext(gpx_path)[0] + '.lst'
+            if not os.path.exists(lst_path):
+                return None
+            try:
+                with open(lst_path, 'r', encoding='utf-8',
+                          errors='replace') as f:
+                    text = f.read()
+            except Exception:
+                return None
+            params_set = set(inst_params or [])
+            pattern = re.compile(
+                r'\*\*\s+([^\s]+)\s+and\s+([^\s]+)\s+\(@([0-9.]+)%\)')
+            for a, b, pct in pattern.findall(text):
+                pa = a.split(':')[-1]
+                pb = b.split(':')[-1]
+                try:
+                    corr = float(pct)
+                except ValueError:
+                    continue
+                if corr >= threshold and pa in params_set and pb in params_set:
+                    return (f"{pa}/{pb} correlation {corr:.2f}% exceeds "
+                            f"{threshold:.1f}%")
+            return None
+
+        _trial_decisions = {}
+
         def _trial(label, inst_params, ckpt_from, cycles=10,
                    min_rwp_gain=0.1):
             """Try adding params from a checkpoint. Accept only if
@@ -956,20 +1168,33 @@ Si1  Si  0.12500  0.12500  0.12500  1.0
             ok, reason = _profile_plausible(p, _SI_PEAK_ANGLES)
 
             if not ok:
-                print(f"    REJECTED: {reason} — rolling back", flush=True)
+                print(f"    REJECTED: {reason}; rolling back", flush=True)
                 _restore(ckpt_from)
+                _trial_decisions[label] = reason
+                return False, rwp_before, None
+
+            corr_reason = _trial_correlation_problem(inst_params)
+            if corr_reason:
+                print(f"    REJECTED: {corr_reason}; rolling back",
+                      flush=True)
+                _restore(ckpt_from)
+                _trial_decisions[label] = corr_reason
                 return False, rwp_before, None
 
             rwp_gain = rwp_before - rwp
             if rwp_gain < min_rwp_gain:
-                print(f"    REJECTED: ΔRwp={rwp_gain:.3f}% < "
-                      f"{min_rwp_gain}% — not meaningful", flush=True)
+                print(f"    REJECTED: dRwp={rwp_gain:.3f}% < "
+                      f"{min_rwp_gain}% - not meaningful", flush=True)
                 _restore(ckpt_from)
+                _trial_decisions[label] = (
+                    f"dRwp={rwp_gain:.3f}% < {min_rwp_gain}%")
                 return False, rwp_before, None
 
-            print(f"    ACCEPTED: ΔRwp={rwp_gain:.3f}%, params plausible",
+            print(f"    ACCEPTED: dRwp={rwp_gain:.3f}%, params plausible",
                   flush=True)
             ckpt = _checkpoint(label.replace(' ', '_').replace('+', ''))
+            _trial_decisions[label] = (
+                f"accepted; dRwp={rwp_gain:.3f}%")
             return True, rwp, ckpt
 
         # ── Diagnostics: dump raw GSAS-II instrument params ──────────
@@ -992,7 +1217,7 @@ Si1  Si  0.12500  0.12500  0.12500  1.0
             W = params.get('W', 0)
             tan_t = np.tan(np.radians(_SI_PEAK_ANGLES / 2.0))
             hg2 = U * tan_t**2 + V * tan_t + W
-            fwhm = np.sqrt(np.maximum(hg2, 0))
+            fwhm = np.sqrt(np.maximum(hg2, 0)) / 100.0
             print(f"    {label} FWHM(deg) at Si peaks: "
                   f"{[f'{x:.4f}' for x in fwhm]}", flush=True)
 
@@ -1002,24 +1227,46 @@ Si1  Si  0.12500  0.12500  0.12500  1.0
         # ── Calibration sequence ───────────────────────────────────────
         print("\n  --- Conservative calibration with checkpoints ---",
               flush=True)
+        _stage_log = []
 
         # Stage 1: BG + scale
         if progress_callback:
             progress_callback('Calibration: BG + scale...')
-        _refine("Stage 1 (BG+scale)", [], cycles=5)
+        _stage_log.append({
+            'stage': 'Stage 1',
+            'label': 'BG + scale',
+            'accepted': True,
+            'Rwp': _refine("Stage 1 (BG+scale)", [], cycles=5),
+            'params': _current_params(),
+            'reason': 'baseline setup',
+        })
         _dump_raw("after Stage 1")
 
         # Stage 2: Zero
         if progress_callback:
             progress_callback('Calibration: Zero...')
-        _refine("Stage 2 (Zero)", ['Zero'], cycles=5)
+        _stage_log.append({
+            'stage': 'Stage 2',
+            'label': 'Zero',
+            'accepted': True,
+            'Rwp': _refine("Stage 2 (Zero)", ['Zero'], cycles=5),
+            'params': _current_params(),
+            'reason': 'peak-position correction',
+        })
         _dump_raw("after Stage 2")
         _print_fwhm(_current_params(), "Stage 2")
 
         # Stage 3: W + Zero (Gaussian floor)
         if progress_callback:
             progress_callback('Calibration: W...')
-        _refine("Stage 3 (W+Zero)", ['W', 'Zero'], cycles=8)
+        _stage_log.append({
+            'stage': 'Stage 3',
+            'label': 'W + Zero',
+            'accepted': True,
+            'Rwp': _refine("Stage 3 (W+Zero)", ['W', 'Zero'], cycles=8),
+            'params': _current_params(),
+            'reason': 'Gaussian width floor',
+        })
         _dump_raw("after Stage 3")
         _print_fwhm(_current_params(), "Stage 3")
 
@@ -1040,6 +1287,15 @@ Si1  Si  0.12500  0.12500  0.12500  1.0
         u_ok, _, u_ckpt = _trial(
             "Trial A (UW)", ['U', 'W', 'Zero'],
             ckpt_from=gauss_ckpt, min_rwp_gain=u_min_gain)
+        _stage_log.append({
+            'stage': 'Trial A',
+            'label': 'U + W + Zero',
+            'accepted': bool(u_ok),
+            'Rwp': _get_rwp(),
+            'params': _current_params(),
+            'reason': _trial_decisions.get(
+                "Trial A (UW)", 'accepted' if u_ok else 'rolled back'),
+        })
         if u_ok:
             gauss_ckpt = u_ckpt
 
@@ -1051,8 +1307,26 @@ Si1  Si  0.12500  0.12500  0.12500  1.0
             v_ok, _, v_ckpt = _trial(
                 "Trial B (UVW)", ['U', 'V', 'W', 'Zero'],
                 ckpt_from=gauss_ckpt, min_rwp_gain=v_min_gain)
+            _stage_log.append({
+                'stage': 'Trial B',
+                'label': 'U + V + W + Zero',
+                'accepted': bool(v_ok),
+                'Rwp': _get_rwp(),
+                'params': _current_params(),
+                'reason': _trial_decisions.get(
+                    "Trial B (UVW)", 'accepted' if v_ok else 'rolled back'),
+            })
             if v_ok:
                 gauss_ckpt = v_ckpt
+        else:
+            _stage_log.append({
+                'stage': 'Trial B',
+                'label': 'U + V + W + Zero',
+                'accepted': False,
+                'Rwp': _get_rwp(),
+                'params': _current_params(),
+                'reason': 'skipped because U was rejected',
+            })
 
         # Build Gaussian param list for Lorentzian trials
         _gauss = ['W', 'Zero']
@@ -1142,12 +1416,24 @@ Si1  Si  0.12500  0.12500  0.12500  1.0
 
         print(f"\n    Candidate ranking:", flush=True)
         for i, (lbl, rw, _, _, _) in enumerate(_candidates):
-            marker = " ← BEST" if i == 0 else ""
+            marker = " <- BEST" if i == 0 else ""
             print(f"      {lbl}: Rwp={rw:.3f}%{marker}", flush=True)
 
         _restore(_best_ckpt)
-        print(f"    → Selected: {_best_label} (Rwp={_best_rwp:.3f}%)",
+        print(f"    Selected: {_best_label} (Rwp={_best_rwp:.3f}%)",
               flush=True)
+        _stage_log.append({
+            'stage': 'Lorentzian selection',
+            'label': _best_label,
+            'accepted': True,
+            'Rwp': _best_rwp,
+            'params': _current_params(),
+            'reason': 'best validated candidate',
+            'candidates': [
+                {'label': lbl, 'Rwp': rw}
+                for lbl, rw, _, _, _ in _candidates
+            ],
+        })
 
         # ← LORENTZIAN CHECKPOINT (before SH/L trial)
         lor_ckpt = _checkpoint('pre_shl')
@@ -1163,17 +1449,58 @@ Si1  Si  0.12500  0.12500  0.12500  1.0
             if shl_ok:
                 _shl = _get_inst_value('SH/L')
                 if _shl < 0 or _shl > 0.1:
-                    print(f"    SH/L={_shl:.5f} suspicious — reverting",
+                    print(f"    SH/L={_shl:.5f} suspicious; reverting",
                           flush=True)
                     _restore(lor_ckpt)
+                    _stage_log.append({
+                        'stage': 'Trial E',
+                        'label': 'SH/L',
+                        'accepted': False,
+                        'Rwp': _get_rwp(),
+                        'params': _current_params(),
+                        'reason': 'suspicious SH/L; rolled back',
+                    })
                 else:
                     _restore(shl_ckpt)
+                    _stage_log.append({
+                        'stage': 'Trial E',
+                        'label': 'SH/L',
+                        'accepted': True,
+                        'Rwp': _get_rwp(),
+                        'params': _current_params(),
+                        'reason': 'accepted',
+                    })
+            else:
+                _stage_log.append({
+                    'stage': 'Trial E',
+                    'label': 'SH/L',
+                    'accepted': False,
+                    'Rwp': _get_rwp(),
+                    'params': _current_params(),
+                    'reason': 'rolled back',
+                })
             # If rejected, _trial already restored lor_ckpt
         else:
             if not refine_sh_l:
                 print("    SH/L: skipped by instrument policy", flush=True)
+                _stage_log.append({
+                    'stage': 'Trial E',
+                    'label': 'SH/L',
+                    'accepted': False,
+                    'Rwp': _get_rwp(),
+                    'params': _current_params(),
+                    'reason': 'skipped by instrument policy',
+                })
             else:
-                print("    SH/L: skipped (no data below 30°)", flush=True)
+                print("    SH/L: skipped (no data below 30 deg)", flush=True)
+                _stage_log.append({
+                    'stage': 'Trial E',
+                    'label': 'SH/L',
+                    'accepted': False,
+                    'Rwp': _get_rwp(),
+                    'params': _current_params(),
+                    'reason': 'skipped; no low-angle data',
+                })
 
         # ── Extract final parameters ───────────────────────────────────
         params = _current_params()
@@ -1220,12 +1547,48 @@ Si1  Si  0.12500  0.12500  0.12500  1.0
         # Caglioti check
         _tan_t = np.tan(np.radians(_SI_PEAK_ANGLES / 2.0))
         _hg2 = params['U'] * _tan_t**2 + params['V'] * _tan_t + params['W']
-        print(f"  FWHM²_G range: [{np.min(_hg2):.4f}, "
-              f"{np.max(_hg2):.4f}] (all positive ✓)"
+        print(f"  FWHM_G^2 range: [{np.min(_hg2):.4f}, "
+              f"{np.max(_hg2):.4f}] (all positive)"
               if np.min(_hg2) > 0 else
-              f"  WARNING: FWHM²_G goes negative!", flush=True)
+              f"  WARNING: FWHM_G^2 goes negative!", flush=True)
 
-        # ── Write .instprm (path resolved at top of function) ──────────
+        validation_reasons = []
+        validation_warnings = []
+        _v_ok, _v_reason = _profile_plausible(params, _SI_PEAK_ANGLES)
+        if not _v_ok:
+            validation_reasons.append(_v_reason)
+        if not allow_x and abs(params.get('X', 0.0)) > 1e-8:
+            validation_reasons.append("X changed despite instrument policy.")
+        if not allow_y and abs(params.get('Y', 0.0)) > 1e-8:
+            validation_reasons.append("Y changed despite instrument policy.")
+        if (not refine_sh_l and
+                abs(params.get('SH/L', fixed_sh_l) - fixed_sh_l) > 1e-8):
+            validation_reasons.append("SH/L changed despite instrument policy.")
+        fwhm_deg = _profile_fwhm_deg(params, _SI_PEAK_ANGLES)
+        if np.nanmin(fwhm_deg) < 0.003:
+            validation_reasons.append("Final Gaussian FWHM is unrealistically narrow.")
+        if np.nanmax(fwhm_deg) > 0.12:
+            validation_reasons.append("Final Gaussian FWHM is unusually broad.")
+        if _best_label == 'Gaussian only':
+            validation_warnings.append(
+                "Lorentzian X/Y terms were not accepted; candidate uses "
+                "Gaussian U/V/W broadening only.")
+        if not v_ok:
+            validation_warnings.append(
+                "V was not accepted; candidate uses the simpler accepted "
+                "Caglioti model.")
+        validation = {
+            'passed': not validation_reasons,
+            'reasons': validation_reasons,
+            'warnings': validation_warnings,
+            'instrument': instrument,
+            'accepted_params': _accepted + ['Zero'],
+            'profile_action': 'staged_gsas_candidate',
+            'production_overwritten': False,
+        }
+
+        # Write candidate .instprm only. The production path is intentionally
+        # not overwritten here; promotion remains a separate user decision.
 
         if _use_doublet:
             _lam = (f"Lam1:{CU_KALPHA1_A:.6f}\n"
@@ -1250,19 +1613,65 @@ Si1  Si  0.12500  0.12500  0.12500  1.0
             f"SH/L:{params.get('SH/L', 0.002):.5f}\n"
             "Azimuth:0.0\n"
         )
-        # Atomic write: .tmp → backup old → replace.
-        _tmp_out = output_instprm + '.tmp'
-        print(f"\n  Writing calibrated instprm to: {output_instprm}",
+        # Atomic write: .tmp -> candidate.
+        _tmp_out = candidate_instprm + '.tmp'
+        _candidate_dir = os.path.dirname(candidate_instprm)
+        if _candidate_dir:
+            os.makedirs(_candidate_dir, exist_ok=True)
+        print(f"\n  Writing calibrated candidate instprm to: {candidate_instprm}",
               flush=True)
-        with open(_tmp_out, 'w') as f:
+        with open(_tmp_out, 'w', encoding='utf-8', newline='\n') as f:
             f.write(content)
-        if os.path.isfile(output_instprm):
-            _bak = output_instprm + '.bak'
-            shutil.copy2(output_instprm, _bak)
-            print(f"  Backed up old file: {_bak}", flush=True)
-        os.replace(_tmp_out, output_instprm)
-        print(f"  .instprm saved successfully.", flush=True)
+        os.replace(_tmp_out, candidate_instprm)
+        print(f"  Candidate .instprm saved successfully.", flush=True)
+        print(f"  Production profile was not overwritten: {production_instprm}",
+              flush=True)
         print(content, flush=True)
+
+        report = {
+            'method': 'Si SRM 640g staged GSAS-II calibration',
+            'standard': {
+                'name': 'NIST SRM 640g Si',
+                'certified_a_angstrom': _SI640G_A_ANGSTROM,
+            },
+            'production_instprm': production_instprm,
+            'candidate_instprm': candidate_instprm,
+            'report_json': report_json,
+            'report_txt': report_txt,
+            'params': params,
+            'validation': validation,
+            'stage_log': _stage_log,
+            'Rwp': _rwp_final,
+            'statistics': stats,
+            'fwhm_deg_at_si_peaks': fwhm_deg.tolist(),
+            'lorentzian_term': 'X' if _use_X else ('Y' if y_ok else 'none'),
+        }
+        with open(report_json, 'w', encoding='utf-8', newline='\n') as f:
+            json.dump(report, f, indent=2)
+        with open(report_txt, 'w', encoding='utf-8', newline='\n') as f:
+            f.write("Si SRM 640g staged GSAS-II calibration report\n")
+            f.write(f"Candidate: {candidate_instprm}\n")
+            f.write(f"Production profile was not overwritten: {production_instprm}\n")
+            f.write(f"Validation: {'PASS' if validation['passed'] else 'FAIL'}\n")
+            if validation['reasons']:
+                f.write("Reasons:\n")
+                for reason in validation['reasons']:
+                    f.write(f"- {reason}\n")
+            if validation['warnings']:
+                f.write("Warnings:\n")
+                for warning in validation['warnings']:
+                    f.write(f"- {warning}\n")
+            f.write(f"Rwp: {_rwp_final:.4f}\n")
+            f.write(f"Lorentzian term: {report['lorentzian_term']}\n")
+            f.write("\nParameters:\n")
+            for key in ['Zero', 'U', 'V', 'W', 'X', 'Y', 'SH/L']:
+                f.write(f"{key}: {params[key]:.6f}\n")
+            f.write("\nStages:\n")
+            for stage in _stage_log:
+                f.write(
+                    f"- {stage['stage']}: {stage['label']}; "
+                    f"accepted={stage['accepted']}; "
+                    f"Rwp={stage['Rwp']:.4f}; {stage['reason']}\n")
 
         # ── Pattern for plotting ───────────────────────────────────────
         try:
@@ -1274,7 +1683,11 @@ Si1  Si  0.12500  0.12500  0.12500  1.0
             diff_out = y_r
 
         return {
-            'instprm_path': output_instprm,
+            'instprm_path': candidate_instprm,
+            'production_instprm_path': production_instprm,
+            'candidate_instprm_path': candidate_instprm,
+            'calibration_report_json': report_json,
+            'calibration_report_txt': report_txt,
             'params': params,
             'Rwp': _rwp_final,
             'accepted_params': _accepted,
@@ -1291,6 +1704,12 @@ Si1  Si  0.12500  0.12500  0.12500  1.0
             },
             'method': 'GSAS-II calibration',
             'lorentzian_term': 'X' if _use_X else ('Y' if y_ok else 'none'),
+            'validation': validation,
+            'stage_log': _stage_log,
+            'profile_action': 'staged_gsas_candidate',
+            'candidate_written': True,
+            'production_overwritten': False,
+            'instprm_text': content,
         }
 
     finally:

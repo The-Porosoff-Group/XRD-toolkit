@@ -1018,6 +1018,10 @@ def process_xrd():
                     cal_result.get('production_overwritten', False),
                 'calibration_peaks':
                     cal_result.get('calibration_peaks', []),
+                'calibration_stage_log':
+                    cal_result.get('stage_log', []),
+                'calibration_profile_action':
+                    cal_result.get('profile_action'),
                 'output_dir':    out_dir,
             })
 
