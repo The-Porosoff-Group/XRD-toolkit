@@ -22,7 +22,7 @@ Usage:
     result = run_calibration(tt, y_obs, sigma, phase, wavelength, ...)
 """
 
-import math, os, sys, tempfile, shutil, warnings, re
+import json, math, os, sys, tempfile, shutil, warnings, re
 import numpy as np
 
 from .gsasii_backend import (
@@ -41,6 +41,510 @@ _CAL_DEFAULTS = {
 
 # Si peak positions for validation (Cu Kα1, a=5.431109 Å)
 _SI_PEAK_ANGLES = np.array([28.44, 47.30, 56.12, 69.13, 76.37, 88.03])
+
+_SI640G_A_ANGSTROM = 5.431109
+_SI640G_PEAKS = [
+    {'hkl': (1, 1, 1), 'two_theta': 28.441},
+    {'hkl': (2, 2, 0), 'two_theta': 47.301},
+    {'hkl': (3, 1, 1), 'two_theta': 56.120},
+    {'hkl': (4, 0, 0), 'two_theta': 69.127},
+    {'hkl': (3, 3, 1), 'two_theta': 76.373},
+    {'hkl': (4, 2, 2), 'two_theta': 88.026},
+    {'hkl': (5, 1, 1), 'two_theta': 94.948},
+    {'hkl': (4, 4, 0), 'two_theta': 106.703},
+    {'hkl': (5, 3, 1), 'two_theta': 114.086},
+    {'hkl': (6, 2, 0), 'two_theta': 127.537},
+    {'hkl': (5, 3, 3), 'two_theta': 136.883},
+]
+
+
+def _instprm_candidate_path(path):
+    root, ext = os.path.splitext(path)
+    return f"{root}_candidate{ext or '.instprm'}"
+
+
+def _read_instprm(path):
+    vals = {}
+    if not path or not os.path.isfile(path):
+        return vals
+    with open(path, 'r', encoding='utf-8', errors='replace') as f:
+        for line in f:
+            if ':' not in line:
+                continue
+            key, val = line.split(':', 1)
+            try:
+                vals[key.strip()] = float(val.strip().split()[0])
+            except Exception:
+                vals[key.strip()] = val.strip()
+    return vals
+
+
+def _write_instprm(path, params, polariz, wavelength):
+    if _is_cu_kalpha(wavelength):
+        lam = (f"Lam1:{CU_KALPHA1_A:.6f}\n"
+               f"Lam2:{CU_KALPHA2_A:.6f}\n"
+               f"I(L2)/I(L1):{CU_KALPHA2_RATIO:.4f}\n")
+    else:
+        lam = f"Lam:{wavelength:.6f}\n"
+    text = (
+        "#GSAS-II instrument parameter file; do not add/delete items!\n"
+        "Type:PXC\n"
+        f"{lam}"
+        f"Zero:{params['Zero']:.5f}\n"
+        f"Polariz.:{polariz}\n"
+        f"U:{params['U']:.4f}\n"
+        f"V:{params['V']:.4f}\n"
+        f"W:{params['W']:.4f}\n"
+        f"X:{params['X']:.4f}\n"
+        f"Y:{params['Y']:.4f}\n"
+        "Z:0.0\n"
+        f"SH/L:{params['SH/L']:.5f}\n"
+        "Azimuth:0.0\n"
+    )
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
+        f.write(text)
+    os.replace(tmp, path)
+    return text
+
+
+def _pseudo_voigt_unit(x, center, fwhm, eta):
+    fwhm = max(float(fwhm), 1e-6)
+    eta = max(0.0, min(1.0, float(eta)))
+    sigma = fwhm / (2.0 * math.sqrt(2.0 * math.log(2.0)))
+    gamma = fwhm / 2.0
+    dx = x - center
+    gauss = np.exp(-0.5 * (dx / sigma) ** 2)
+    lor = 1.0 / (1.0 + (dx / gamma) ** 2)
+    return eta * lor + (1.0 - eta) * gauss
+
+
+def _kalpha2_position(two_theta_kalpha1):
+    theta1 = math.radians(two_theta_kalpha1 / 2.0)
+    d = CU_KALPHA1_A / (2.0 * math.sin(theta1))
+    sin2 = CU_KALPHA2_A / (2.0 * d)
+    if sin2 >= 1.0:
+        return None
+    return 2.0 * math.degrees(math.asin(sin2))
+
+
+def _solve_3x3(M, b):
+    """Small Gaussian-elimination solver for 3x3 systems.
+
+    Avoids LAPACK/BLAS calls in calibration, which have proven fragile in
+    some local Windows Python stacks.
+    """
+    A = [[float(M[i][j]) for j in range(3)] for i in range(3)]
+    y = [float(b[i]) for i in range(3)]
+    for col in range(3):
+        pivot = max(range(col, 3), key=lambda r: abs(A[r][col]))
+        if abs(A[pivot][col]) < 1e-12:
+            return None
+        if pivot != col:
+            A[col], A[pivot] = A[pivot], A[col]
+            y[col], y[pivot] = y[pivot], y[col]
+        piv = A[col][col]
+        for j in range(col, 3):
+            A[col][j] /= piv
+        y[col] /= piv
+        for r in range(3):
+            if r == col:
+                continue
+            factor = A[r][col]
+            for j in range(col, 3):
+                A[r][j] -= factor * A[col][j]
+            y[r] -= factor * y[col]
+    return np.array(y, dtype=float)
+
+
+def _weighted_linear3(c0, c1, c2, y, inv_w):
+    w2 = inv_w * inv_w
+    cols = [c0, c1, c2]
+    M = [[float(np.sum(w2 * cols[i] * cols[j])) for j in range(3)]
+         for i in range(3)]
+    b = [float(np.sum(w2 * cols[i] * y)) for i in range(3)]
+    return _solve_3x3(M, b)
+
+
+def _fit_si_peak(tt, yy, sig, peak, expected_fwhm=None):
+    t1 = float(peak['two_theta'])
+    t2 = _kalpha2_position(t1)
+    if t2 is None:
+        return None
+    half_width = max(0.35, min(0.85, 0.22 + 0.0045 * t1))
+    mask = (tt >= t1 - half_width) & (tt <= t2 + half_width)
+    x = np.asarray(tt[mask], dtype=float)
+    y = np.asarray(yy[mask], dtype=float)
+    w = np.asarray(sig[mask], dtype=float)
+    if x.size < 9:
+        return None
+    w = np.where(w > 0, w, np.sqrt(np.maximum(y, 1.0)))
+
+    edge = max(2, x.size // 8)
+    bg0 = float(np.median(np.r_[y[:edge], y[-edge:]]))
+    amp0 = float(max(np.max(y) - bg0, 1.0))
+    xx = x - t1
+    inv_w = 1.0 / np.maximum(w, 1.0)
+
+    def solve_for(delta, fwhm, eta):
+        shape = (
+            _pseudo_voigt_unit(x, t1 + delta, fwhm, eta)
+            + CU_KALPHA2_RATIO * _pseudo_voigt_unit(x, t2 + delta,
+                                                    fwhm, eta)
+        )
+        coef = _weighted_linear3(np.ones_like(x), xx, shape, y, inv_w)
+        if coef is None:
+            return float('inf'), np.array([0.0, 0.0, -1.0]), y * 0.0
+        yfit = coef[0] + coef[1] * xx + coef[2] * shape
+        rss = float(np.mean(((yfit - y) * inv_w) ** 2))
+        return rss, coef, yfit
+
+    # Deterministic coarse-to-fine grid. This avoids SciPy optimizer
+    # instability while still fitting the Cu K-alpha doublet explicitly.
+    best = None
+    if expected_fwhm is None or expected_fwhm <= 0:
+        expected_fwhm = 0.020
+    f_lo = max(0.008, expected_fwhm - 0.010)
+    f_hi = min(0.040, expected_fwhm + 0.010)
+    grids = [
+        (np.linspace(-0.08, 0.08, 33),
+         np.linspace(f_lo, f_hi, 33),
+         (0.15, 0.35, 0.55, 0.75)),
+    ]
+    for deltas, fwhms, etas in grids:
+        for delta in deltas:
+            for fwhm in fwhms:
+                for eta in etas:
+                    rss, coef, yfit = solve_for(delta, fwhm, eta)
+                    if coef[2] <= 0:
+                        continue
+                    if best is None or rss < best[0]:
+                        best = (rss, coef, yfit, delta, fwhm, eta)
+    if best is None:
+        return None
+    _, _, _, d0, f0, e0 = best
+    deltas = np.linspace(d0 - 0.006, d0 + 0.006, 25)
+    fwhms = np.linspace(max(f_lo, f0 - 0.003),
+                        min(f_hi, f0 + 0.003), 25)
+    etas = np.linspace(max(0.0, e0 - 0.20), min(0.95, e0 + 0.20), 9)
+    for delta in deltas:
+        for fwhm in fwhms:
+            for eta in etas:
+                rss, coef, yfit = solve_for(delta, fwhm, eta)
+                if coef[2] <= 0:
+                    continue
+                if rss < best[0]:
+                    best = (rss, coef, yfit, delta, fwhm, eta)
+
+    _, coef, yfit, delta, fwhm, eta = best
+    noise = float(np.std(np.r_[y[:edge], y[-edge:]]))
+    snr = float(coef[2] / max(noise, 1.0))
+    accepted = (
+        coef[2] > 0
+        and f_lo <= fwhm <= f_hi
+        and abs(delta) <= 0.12
+        and snr >= 5.0
+    )
+    return {
+        'hkl': peak['hkl'],
+        'expected_two_theta': t1,
+        'kalpha2_two_theta': t2,
+        'observed_two_theta': float(t1 + delta),
+        'zero_error': float(delta),
+        'fwhm_deg': float(fwhm),
+        'eta': float(eta),
+        'amplitude': float(coef[2]),
+        'background': float(coef[0]),
+        'slope': float(coef[1]),
+        'rms': float(np.sqrt(np.mean((yfit - y) ** 2))),
+        'snr': snr,
+        'accepted': accepted,
+        'x': x.tolist(),
+        'y_fit': yfit.tolist(),
+    }
+
+
+def _fit_caglioti_from_peaks(peaks, baseline=None):
+    accepted = [p for p in peaks if p.get('accepted')]
+    if len(accepted) < 3:
+        raise RuntimeError(
+            f"Calibration needs at least 3 accepted Si peaks; got {len(accepted)}.")
+    tt = np.array([p['expected_two_theta'] for p in accepted], dtype=float)
+    fwhm = np.array([p['fwhm_deg'] for p in accepted], dtype=float)
+    tan_t = np.tan(np.radians(tt / 2.0))
+    y = (fwhm * 100.0) ** 2
+
+    c0 = tan_t**2
+    c1 = tan_t
+    c2 = np.ones_like(tan_t)
+    if baseline:
+        start = np.array([
+            float(baseline.get('U', 1.5)),
+            float(baseline.get('V', -2.0)),
+            float(baseline.get('W', 4.7)),
+        ])
+        inv_w = np.ones(len(y) + 3, dtype=float)
+        c0_fit = np.r_[c0, 1 / 4.0, 0.0, 0.0]
+        c1_fit = np.r_[c1, 0.0, 1 / 6.0, 0.0]
+        c2_fit = np.r_[c2, 0.0, 0.0, 1 / 4.0]
+        y_fit = np.r_[y, start[0] / 4.0, start[1] / 6.0,
+                      start[2] / 4.0]
+    else:
+        inv_w = np.ones(len(y), dtype=float)
+        c0_fit, c1_fit, c2_fit = c0, c1, c2
+        y_fit = y
+    coef = _weighted_linear3(c0_fit, c1_fit, c2_fit, y_fit, inv_w)
+    if coef is None:
+        coef = np.array([1.5, -2.0, 4.7], dtype=float)
+    lo = np.array([-5.0, -8.0, 1.0])
+    hi = np.array([6.0, 4.0, 9.0])
+    coef = np.minimum(np.maximum(coef, lo), hi)
+    U, V, W = [float(v) for v in coef]
+    fitted = np.sqrt(np.maximum(
+        U * tan_t**2 + V * tan_t + W, 0.0)) / 100.0
+    return {
+        'U': U,
+        'V': V,
+        'W': W,
+        'fwhm_rms_deg': float(np.sqrt(np.mean((fitted - fwhm) ** 2))),
+    }
+
+
+def _profile_fwhm_deg(params, two_theta):
+    tan_t = np.tan(np.radians(np.asarray(two_theta, dtype=float) / 2.0))
+    hg2 = params['U'] * tan_t**2 + params['V'] * tan_t + params['W']
+    return np.sqrt(np.maximum(hg2, 0.0)) / 100.0
+
+
+def _validate_candidate(params, peaks, baseline, instrument):
+    reasons = []
+    accepted = [p for p in peaks if p.get('accepted')]
+    if len(accepted) < 3:
+        reasons.append(f"Only {len(accepted)} accepted Si peaks.")
+    if abs(params.get('X', 0.0)) > 1e-8:
+        reasons.append("X must remain fixed at 0.0 for SmartLab.")
+    if abs(params.get('Y', 0.0)) > 1e-8:
+        reasons.append("Y must remain fixed at 0.0 for SmartLab.")
+    if abs(params.get('SH/L', 0.002) - 0.002) > 1e-8:
+        reasons.append("SH/L must remain fixed at 0.002 for SmartLab.")
+
+    tt_check = np.array([p['two_theta'] for p in _SI640G_PEAKS
+                         if 20.0 <= p['two_theta'] <= 90.0])
+    tan_t = np.tan(np.radians(tt_check / 2.0))
+    hg2 = params['U'] * tan_t**2 + params['V'] * tan_t + params['W']
+    if np.min(hg2) <= 0:
+        reasons.append("Caglioti H_G^2 becomes non-positive in the Si range.")
+    if baseline:
+        base_params = {
+            'U': float(baseline.get('U', params['U'])),
+            'V': float(baseline.get('V', params['V'])),
+            'W': float(baseline.get('W', params['W'])),
+        }
+        diff = np.abs(_profile_fwhm_deg(params, tt_check)
+                      - _profile_fwhm_deg(base_params, tt_check))
+        if float(np.max(diff)) > 0.006:
+            reasons.append(
+                f"FWHM curve differs from production profile by "
+                f"{float(np.max(diff)):.4f} deg.")
+        if abs(params['U'] - base_params['U']) > 5.0:
+            reasons.append("U drift exceeds SmartLab validation bound.")
+        if abs(params['V'] - base_params['V']) > 8.0:
+            reasons.append("V drift exceeds SmartLab validation bound.")
+        if abs(params['W'] - base_params['W']) > 4.0:
+            reasons.append("W drift exceeds SmartLab validation bound.")
+
+    return {
+        'passed': not reasons,
+        'reasons': reasons,
+        'accepted_peak_count': len(accepted),
+        'instrument': instrument,
+    }
+
+
+def run_silicon_profile_calibration(tt, y_obs, sigma, phase, wavelength,
+                                    tt_min=None, tt_max=None, n_bg_coeffs=6,
+                                    polariz=None, instrument=None,
+                                    output_instprm=None,
+                                    progress_callback=None,
+                                    keep_workdir=False):
+    """Calibrate Si SRM 640g as a guarded candidate profile."""
+    instrument = instrument or DEFAULT_INSTRUMENT
+    profile = INSTRUMENT_PROFILES.get(instrument,
+                INSTRUMENT_PROFILES[DEFAULT_INSTRUMENT])
+    if polariz is None:
+        polariz = profile.get('polariz', 0.7)
+    fixed_sh_l = float(profile.get('calibration_fixed_sh_l', 0.002))
+
+    toolkit_root = os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))))
+    if output_instprm is None:
+        output_instprm = os.path.join(
+            toolkit_root,
+            profile.get('instprm_filename', f'{instrument}_Si640g.instprm'))
+    production_instprm = output_instprm
+    candidate_instprm = _instprm_candidate_path(production_instprm)
+    report_json = os.path.splitext(candidate_instprm)[0] + '_report.json'
+    report_txt = os.path.splitext(candidate_instprm)[0] + '_report.txt'
+
+    if tt_min is None:
+        tt_min = float(np.min(tt))
+    if tt_max is None:
+        tt_max = float(np.max(tt))
+    mask = (tt >= tt_min) & (tt <= tt_max)
+    tt_r = np.asarray(tt[mask], dtype=float)
+    y_r = np.asarray(y_obs[mask], dtype=float)
+    sig_r = (np.asarray(sigma[mask], dtype=float)
+             if sigma is not None else np.sqrt(np.maximum(y_r, 1.0)))
+
+    if progress_callback:
+        progress_callback('Calibration: fitting Si standard peaks...')
+    print("  *** SI SRM 640g PEAK-METROLOGY CALIBRATION ***", flush=True)
+    print(f"  Production profile protected: {production_instprm}", flush=True)
+    print(f"  Candidate profile path:       {candidate_instprm}", flush=True)
+
+    baseline = _read_instprm(production_instprm)
+    peaks = []
+    for peak in _SI640G_PEAKS:
+        t1 = peak['two_theta']
+        if t1 < tt_min + 0.25 or t1 > tt_max - 0.25:
+            continue
+        expected_fwhm = None
+        if baseline and all(k in baseline for k in ('U', 'V', 'W')):
+            expected_fwhm = float(_profile_fwhm_deg({
+                'U': float(baseline['U']),
+                'V': float(baseline['V']),
+                'W': float(baseline['W']),
+            }, [t1])[0])
+        fit = _fit_si_peak(tt_r, y_r, sig_r, peak,
+                           expected_fwhm=expected_fwhm)
+        if fit is not None:
+            peaks.append(fit)
+
+    uvw = _fit_caglioti_from_peaks(peaks, baseline=baseline)
+    zero_vals = [p['zero_error'] for p in peaks if p.get('accepted')]
+    zero = float(np.median(zero_vals)) if zero_vals else 0.0
+    params = {
+        'Zero': zero,
+        'Polariz.': float(polariz),
+        'U': uvw['U'],
+        'V': uvw['V'],
+        'W': uvw['W'],
+        'X': 0.0,
+        'Y': 0.0,
+        'SH/L': fixed_sh_l,
+    }
+    extracted_params = params.copy()
+    validation = _validate_candidate(params, peaks, baseline, instrument)
+    profile_action = 'calibrated_from_peak_widths'
+    if (not validation['passed'] and baseline
+            and all(k in baseline for k in ('U', 'V', 'W'))):
+        params = params.copy()
+        params['U'] = float(baseline['U'])
+        params['V'] = float(baseline['V'])
+        params['W'] = float(baseline['W'])
+        profile_action = 'production_width_profile_retained'
+        validation = _validate_candidate(params, peaks, baseline, instrument)
+        validation.setdefault('warnings', [])
+        validation['warnings'].append(
+            'Extracted Si peak widths did not pass SmartLab validation; '
+            'candidate retained production U/V/W.')
+
+    candidate_dir = os.path.dirname(candidate_instprm)
+    if candidate_dir:
+        os.makedirs(candidate_dir, exist_ok=True)
+    content = _write_instprm(candidate_instprm, params, polariz, wavelength)
+    report = {
+        'method': 'Si SRM 640g constrained peak-metrology calibration',
+        'standard': {
+            'name': 'NIST SRM 640g Si',
+            'certified_a_angstrom': _SI640G_A_ANGSTROM,
+        },
+        'production_instprm': production_instprm,
+        'candidate_instprm': candidate_instprm,
+        'report_json': report_json,
+        'report_txt': report_txt,
+        'params': params,
+        'extracted_params': extracted_params,
+        'profile_action': profile_action,
+        'validation': validation,
+        'peaks': [
+            {k: v for k, v in p.items() if k not in ('x', 'y_fit')}
+            for p in peaks
+        ],
+        'fwhm_fit_rms_deg': uvw['fwhm_rms_deg'],
+    }
+    with open(report_json, 'w', encoding='utf-8', newline='\n') as f:
+        json.dump(report, f, indent=2)
+    with open(report_txt, 'w', encoding='utf-8', newline='\n') as f:
+        f.write("Si SRM 640g calibration report\n")
+        f.write(f"Candidate: {candidate_instprm}\n")
+        f.write(f"Production profile was not overwritten: {production_instprm}\n")
+        f.write(f"Validation: {'PASS' if validation['passed'] else 'FAIL'}\n")
+        if validation['reasons']:
+            f.write("Reasons:\n")
+            for reason in validation['reasons']:
+                f.write(f"- {reason}\n")
+        if validation.get('warnings'):
+            f.write("Warnings:\n")
+            for warning in validation['warnings']:
+                f.write(f"- {warning}\n")
+        f.write(f"Profile action: {profile_action}\n")
+        f.write("\nParameters:\n")
+        for key in ['Zero', 'U', 'V', 'W', 'X', 'Y', 'SH/L']:
+            f.write(f"{key}: {params[key]:.6f}\n")
+
+    y_bg = np.full_like(y_r, float(np.percentile(y_r, 5.0)))
+    y_calc = y_bg.copy()
+    for p in peaks:
+        if not p.get('accepted'):
+            continue
+        x_local = np.asarray(p['x'], dtype=float)
+        y_fit_local = np.asarray(p['y_fit'], dtype=float)
+        idx = np.searchsorted(tt_r, x_local)
+        valid = (idx >= 0) & (idx < len(tt_r))
+        y_calc[idx[valid]] = y_fit_local[valid]
+    residuals = y_r - y_calc
+    fit_mask = y_calc > y_bg + 1e-6
+    if np.any(fit_mask):
+        rwp = float(100.0 * np.sqrt(
+            np.sum(residuals[fit_mask] ** 2)
+            / max(np.sum(y_r[fit_mask] ** 2), 1e-12)))
+    else:
+        rwp = 0.0
+
+    print(f"  Candidate written: {candidate_instprm}", flush=True)
+    print(f"  Validation: {'PASS' if validation['passed'] else 'FAIL'}",
+          flush=True)
+    for reason in validation['reasons']:
+        print(f"    - {reason}", flush=True)
+    for warning in validation.get('warnings', []):
+        print(f"    - warning: {warning}", flush=True)
+
+    return {
+        'instprm_path': candidate_instprm,
+        'production_instprm_path': production_instprm,
+        'candidate_instprm_path': candidate_instprm,
+        'calibration_report_json': report_json,
+        'calibration_report_txt': report_txt,
+        'params': params,
+        'Rwp': rwp,
+        'accepted_params': ['U', 'V', 'W', 'Zero'],
+        'tt': tt_r.tolist(),
+        'y_obs': y_r.tolist(),
+        'y_calc': y_calc.tolist(),
+        'y_background': y_bg.tolist(),
+        'residuals': residuals.tolist(),
+        'statistics': {'Rwp': rwp, 'Rp': 0, 'chi2': 0, 'GoF': 0},
+        'method': 'Si SRM 640g constrained calibration',
+        'lorentzian_term': 'none',
+        'validation': validation,
+        'calibration_peaks': report['peaks'],
+        'extracted_params': extracted_params,
+        'profile_action': profile_action,
+        'candidate_written': True,
+        'production_overwritten': False,
+        'instprm_text': content,
+    }
 
 
 def _profile_plausible(params, tt_check=None):
@@ -99,6 +603,20 @@ def run_calibration(tt, y_obs, sigma, phase, wavelength,
 
     Returns dict with 'instprm_path', 'params', 'Rwp', plot arrays, etc.
     """
+    # Default path for Si SRM 640g standards: local peak metrology with
+    # candidate-profile output. This keeps the production instrument profile
+    # protected and avoids the unstable global GSAS parameter tradeoffs.
+    _sg = int((phase or {}).get('spacegroup_number', 0) or 0)
+    _inst = (instrument or DEFAULT_INSTRUMENT or '').lower()
+    if _sg == 227 or _inst == 'smartlab':
+        return run_silicon_profile_calibration(
+            tt, y_obs, sigma, phase, wavelength,
+            tt_min=tt_min, tt_max=tt_max, n_bg_coeffs=n_bg_coeffs,
+            polariz=polariz, instrument=instrument,
+            output_instprm=output_instprm,
+            progress_callback=progress_callback,
+            keep_workdir=keep_workdir)
+
     if not _GSASII_AVAILABLE:
         raise RuntimeError(f"GSAS-II not available: {_GSASII_IMPORT_ERROR}")
 

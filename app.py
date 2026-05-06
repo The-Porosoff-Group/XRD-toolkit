@@ -213,7 +213,7 @@ MODULES = [
 def index():
     reaction_configs = gc_processor.list_reaction_configs(
         os.path.join(MODULES_DIR, 'reaction_configs'))
-    return render_template('xrd_toolkit/index.html',
+    return render_template('index.html',
                            modules=MODULES,
                            reaction_configs=reaction_configs,
                            mp_key_set=bool(MP_API_KEY),
@@ -1003,6 +1003,21 @@ def process_xrd():
                 'pymatgen_used': False,
                 'method':        'GSAS-II Calibration',
                 'instprm_path':  cal_result['instprm_path'],
+                'production_instprm_path':
+                    cal_result.get('production_instprm_path'),
+                'candidate_instprm_path':
+                    cal_result.get('candidate_instprm_path',
+                                   cal_result.get('instprm_path')),
+                'calibration_report_json':
+                    cal_result.get('calibration_report_json'),
+                'calibration_report_txt':
+                    cal_result.get('calibration_report_txt'),
+                'calibration_validation':
+                    cal_result.get('validation', {}),
+                'production_overwritten':
+                    cal_result.get('production_overwritten', False),
+                'calibration_peaks':
+                    cal_result.get('calibration_peaks', []),
                 'output_dir':    out_dir,
             })
 
@@ -1175,7 +1190,7 @@ def process_xrd():
 # ── Launch ────────────────────────────────────────────────────────────────────
 
 def startup_url():
-    target = (os.environ.get('CATALYSIS_TOOLKIT_START_PATH') or '/xrd').strip()
+    target = (os.environ.get('CATALYSIS_TOOLKIT_START_PATH') or '/').strip()
     if target.startswith(('http://', 'https://')):
         return target
     if not target.startswith('/'):
