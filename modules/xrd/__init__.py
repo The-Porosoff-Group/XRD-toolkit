@@ -38,9 +38,13 @@ def parse_xrd_file(filepath):
       .xye  — three-column (2theta intensity error)
       .csv  — comma-separated
       .txt  — whitespace-separated
+      .xlsx - Excel worksheet with 2theta/intensity columns
     Returns dict: tt, intensity, sigma, metadata
     """
     ext = os.path.splitext(filepath)[1].lower()
+    if ext == '.xlsx':
+        return _parse_xlsx(filepath)
+
     with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
         raw = f.read()
     # Normalise line endings
@@ -134,6 +138,126 @@ def _parse_powdergraph(lines):
         'sigma':     np.array(sig_list),
         'metadata':  {'format': 'PowderGraph'},
     }
+
+
+def _norm_header(value):
+    text = str(value or '').strip().lower()
+    return re.sub(r'[^a-z0-9]+', '', text)
+
+
+def _pick_column(headers, groups):
+    for names in groups:
+        wanted = {_norm_header(n) for n in names}
+        for idx, header in enumerate(headers):
+            if header in wanted:
+                return idx
+    for names in groups:
+        wanted = tuple(_norm_header(n) for n in names)
+        for idx, header in enumerate(headers):
+            if header and any(name and name in header for name in wanted):
+                return idx
+    return None
+
+
+def _to_float(value):
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(out):
+        return None
+    return out
+
+
+def _parse_xlsx_sheet(ws):
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        return None
+
+    header_row = None
+    for i, row in enumerate(rows[:30]):
+        headers = [_norm_header(v) for v in row]
+        tt_idx = _pick_column(headers, [
+            ('2thetadeg', '2theta', 'twotheta', 'twothetadeg',
+             'twothetaangle', 'angle', 'x'),
+        ])
+        int_idx = _pick_column(headers, [
+            ('intx',),
+            ('intensity', 'intensitycounts', 'counts', 'count', 'y'),
+        ])
+        if tt_idx is not None and int_idx is not None and tt_idx != int_idx:
+            header_row = i
+            break
+
+    if header_row is not None:
+        headers = [_norm_header(v) for v in rows[header_row]]
+        tt_idx = _pick_column(headers, [
+            ('2thetadeg', '2theta', 'twotheta', 'twothetadeg',
+             'twothetaangle', 'angle', 'x'),
+        ])
+        int_idx = _pick_column(headers, [
+            ('intx',),
+            ('intensity', 'intensitycounts', 'counts', 'count', 'y'),
+        ])
+        sig_idx = _pick_column(headers, [
+            ('sigx',),
+            ('sigma', 'error', 'err', 'esd', 'stddev', 'stdev'),
+        ])
+        count_idx = _pick_column(headers, [('count', 'counts')])
+        data_rows = rows[header_row + 1:]
+    else:
+        tt_idx, int_idx, sig_idx, count_idx = 0, 1, 2, None
+        data_rows = rows
+
+    tt_list, int_list, sig_list = [], [], []
+    for row in data_rows:
+        if row is None or max(tt_idx, int_idx) >= len(row):
+            continue
+        tt = _to_float(row[tt_idx])
+        ix = _to_float(row[int_idx])
+        if tt is None or ix is None or tt <= 0 or ix < 0:
+            continue
+        ct = (_to_float(row[count_idx])
+              if count_idx is not None and count_idx < len(row) else None)
+        if count_idx is not None and ct is not None and ct <= 0:
+            continue
+        sx = (_to_float(row[sig_idx])
+              if sig_idx is not None and sig_idx < len(row) else None)
+        if sx is None or sx <= 0:
+            sx = math.sqrt(max(ix, 1.0))
+        tt_list.append(tt)
+        int_list.append(ix)
+        sig_list.append(sx)
+
+    if len(tt_list) < 2:
+        return None
+    return {
+        'tt':        np.array(tt_list),
+        'intensity': np.array(int_list),
+        'sigma':     np.array(sig_list),
+        'metadata':  {'format': 'Excel',
+                      'sheet': ws.title,
+                      'n_points': len(tt_list)},
+    }
+
+
+def _parse_xlsx(filepath):
+    try:
+        import openpyxl
+    except ImportError as exc:
+        raise ValueError('Excel XRD files require openpyxl to be installed.') from exc
+
+    wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
+    try:
+        for ws in wb.worksheets:
+            parsed = _parse_xlsx_sheet(ws)
+            if parsed is not None:
+                return parsed
+    finally:
+        wb.close()
+    raise ValueError('No usable 2theta/intensity columns found in Excel XRD file.')
 
 
 def _parse_generic(lines, ext):

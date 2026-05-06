@@ -30,7 +30,7 @@ The first launch creates a local Python environment and installs dependencies. G
 
 ## Main Features
 
-- XRD file upload with live preview
+- XRD file upload with live preview (`.dat`, `.xy`, `.xye`, `.csv`, `.txt`, `.xlsx`)
 - Materials Project phase search
 - Manual CIF upload
 - CIF caching and validation

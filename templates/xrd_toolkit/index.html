@@ -706,11 +706,11 @@
           <div class="card-body" style="display:flex;flex-direction:column;gap:12px;">
             <div class="dropzone" id="xrd-dropzone" ondragover="onDragOver2(event)" ondragleave="onDragLeave2(event)" ondrop="onDrop2(event)"
                  style="padding:20px;min-height:90px;transition:all 0.35s ease;">
-              <input type="file" id="xrdFileInput" accept=".dat,.xy,.xye,.csv,.txt" onchange="onXrdFileSelect(event)">
+              <input type="file" id="xrdFileInput" accept=".dat,.xy,.xye,.csv,.txt,.xlsx" onchange="onXrdFileSelect(event)">
               <div id="xrd-dropzone-content" style="display:flex;flex-direction:column;align-items:center;gap:8px;justify-content:center;padding:10px 0;">
                 <span style="font-size:40px;">📊</span>
                 <div class="dropzone-text" style="font-size:14px;font-weight:600;">Drag &amp; drop XRD data file</div>
-                <div class="dropzone-sub">.dat · .xy · .xye · .csv · .txt · or click to browse</div>
+                <div class="dropzone-sub">.dat · .xy · .xye · .csv · .txt · .xlsx · or click to browse</div>
               </div>
             </div>
             <!-- Live preview plot — shown after file upload -->
@@ -3457,7 +3457,7 @@ function resetXRD() {
     <div style="display:flex;flex-direction:column;align-items:center;gap:8px;justify-content:center;padding:10px 0;">
       <span style="font-size:40px;">📊</span>
       <div class="dropzone-text" style="font-size:14px;font-weight:600;">Drag &amp; drop XRD data file</div>
-      <div class="dropzone-sub">.dat · .xy · .xye · .csv · .txt · or click to browse</div>
+      <div class="dropzone-sub">.dat · .xy · .xye · .csv · .txt · .xlsx · or click to browse</div>
     </div>`;
   document.getElementById('xrdFileInput').value = '';
 
