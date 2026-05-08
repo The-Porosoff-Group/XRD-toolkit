@@ -2031,7 +2031,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
     # phase_options is a list (one entry per phase, indexed) of dicts:
     #   {"refine_size": bool, "refine_mustrain": bool,
     #    "po_mode": "off"|"fixed"|"refined",
-    #    "po_value": float, "po_axis": [h, k, l] or None}
+    #    "po_value": float, "po_axis": [h, k, l] or hex [h, k, i, l]}
     # When provided, the backend applies these per-phase by index instead
     # of the legacy name-based WC/W2C options.
     phase_options_raw = options.get('phase_options', None)
@@ -2105,6 +2105,56 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                     if k in _explicit:
                         defaults[k] = _explicit[k]
         return defaults
+
+    def _coerce_po_axis(axis_value, crystal_system, phase_idx=None):
+        """Return (GSAS hkl, submitted axis, notation) for PO controls.
+
+        GSAS-II stores March-Dollase axes as three-index hkl. Hexagonal
+        and trigonal users often write the equivalent Miller-Bravais plane
+        normal as h k i l; in that case i is redundant and h k l is sent to
+        GSAS-II. Four-index crystallographic direction notation is not used
+        here because GSAS-II's Pref.Ori. field expects the reflection axis.
+        """
+        if axis_value is None:
+            return None, None, None
+        vals = None
+        if isinstance(axis_value, str):
+            pieces = [p for p in re.split(r'[\s,\[\]\(\)]+',
+                                          axis_value.strip()) if p]
+            vals = pieces
+        elif isinstance(axis_value, (list, tuple)):
+            vals = list(axis_value)
+        if not vals:
+            return None, None, None
+        try:
+            vals = [int(round(float(v))) for v in vals]
+        except (TypeError, ValueError):
+            print(f"  Phase {phase_idx}: ignored invalid PO axis "
+                  f"{axis_value!r}.", flush=True)
+            return None, None, None
+
+        sys_l = (crystal_system or '').lower()
+        if len(vals) == 3:
+            return vals, vals, 'hkl'
+        if len(vals) == 4:
+            if sys_l not in ('hexagonal', 'trigonal'):
+                print(f"  Phase {phase_idx}: ignored four-index PO axis "
+                      f"{vals}; four-index axes are only interpreted for "
+                      f"hexagonal/trigonal phases.", flush=True)
+                return None, vals, 'invalid_hkil'
+            h, k, i, l = vals
+            expected_i = -(h + k)
+            if i != expected_i:
+                print(f"  Phase {phase_idx}: four-index PO axis {vals} "
+                      f"has i={i}, expected i=-(h+k)={expected_i}; "
+                      f"using h k l = {[h, k, l]} for GSAS-II.",
+                      flush=True)
+            return [h, k, l], vals, 'hkil'
+
+        print(f"  Phase {phase_idx}: ignored PO axis {vals}; expected "
+              f"three-index h k l or hexagonal four-index h k i l.",
+              flush=True)
+        return None, vals, 'invalid'
 
     _uniform_cell_phase_idxs = set()
     for _idx_uc, _ph_uc in enumerate(phases):
@@ -2965,6 +3015,8 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         # Used by the refine-flag loop later to skip setting Pref.Ori.→True.
         _po_fixed_phases = set()
         _po_phase_modes = {}
+        _po_axis_inputs = {}
+        _po_axis_notations = {}
         for idx, (phase_obj, ph_input) in enumerate(zip(gsas_phases, phases)):
             if idx in _negligible_phases:
                 continue
@@ -2995,16 +3047,17 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
 
             # Resolve direction: explicit per-phase axis wins, else
             # crystal-system default.
-            if _po_axis_p and isinstance(_po_axis_p, (list, tuple)) \
-                    and len(_po_axis_p) == 3:
-                _po_dir = [int(round(float(x))) for x in _po_axis_p]
-            else:
+            _po_dir, _po_axis_in, _po_axis_notation = _coerce_po_axis(
+                _po_axis_p, sys_, idx)
+            if _po_dir is None:
                 if sys_ in ('hexagonal', 'trigonal'):
                     _po_dir = [0, 0, 1]
                 elif sys_ == 'orthorhombic':
                     _po_dir = [1, 0, 0]
                 else:
                     _po_dir = [0, 0, 1]
+                _po_axis_in = _po_dir
+                _po_axis_notation = 'default_hkl'
 
             # Resolve value: per-phase value wins, else fix_po_opt value
             # (legacy), else 1.0.
@@ -3025,18 +3078,25 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                 _pref_ori_phases.add(idx)
                 _po_phase_modes[idx] = (
                     _po_mode_p if _has_per_phase_po else 'global')
+                _po_axis_inputs[idx] = _po_axis_in
+                _po_axis_notations[idx] = _po_axis_notation
                 if _is_fixed:
                     _po_fixed_phases.add(idx)
                 _src = 'phase_options' if _has_per_phase_po else 'auto/global'
+                _axis_note = ''
+                if _po_axis_in and _po_axis_in != _po_dir:
+                    _axis_note = (f" input {_po_axis_in} "
+                                  f"({_po_axis_notation}) -> GSAS {_po_dir}")
                 if _is_fixed:
                     print(f"  Phase {idx} ({sys_}): March-Dollase "
                           f"{_po_dir} PO held at "
-                          f"{_po_init:.4f} (not refined) [{_src}].",
+                          f"{_po_init:.4f} (not refined) [{_src}]."
+                          f"{_axis_note}",
                           flush=True)
                 else:
                     print(f"  Phase {idx} ({sys_}): March-Dollase "
                           f"{_po_dir} preferred orientation enabled "
-                          f"[{_src}].", flush=True)
+                          f"[{_src}].{_axis_note}", flush=True)
             except Exception as e:
                 print(f"  Phase {idx}: could not set preferred "
                       f"orientation: {e}", flush=True)
@@ -4309,6 +4369,12 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                     round(pref_ori_value, 5)
                     if pref_ori_value is not None else None),
                 'preferred_orientation_axis': pref_ori_axis,
+                'preferred_orientation_axis_input': (
+                    _po_axis_inputs.get(i)
+                    if pref_ori_value is not None else None),
+                'preferred_orientation_axis_notation': (
+                    _po_axis_notations.get(i)
+                    if pref_ori_value is not None else None),
                 'preferred_orientation_refined': pref_ori_refined,
                 'preferred_orientation_source': pref_ori_source,
                 'eta_at_strongest':  round(eta_rep, 3),
