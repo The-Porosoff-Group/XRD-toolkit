@@ -910,7 +910,7 @@
               <b>Mustrain</b> refines that phase's microstrain broadening.
               <b>PO</b> controls March-Dollase preferred orientation: <b>off</b> disables it,
               <b>fixed</b> applies the entered axis/value without refining, and <b>refined</b> lets the value vary.
-              <b>axis</b> is the preferred-orientation direction as h k l.
+              <b>axis</b> is the preferred-orientation direction as h k l; hexagonal/trigonal phases also accept h k i l.
               <b>value</b> is the March-Dollase ratio, where 1.0 means no texture. Fixed values should come from a validated prior or repeated comparison workflow.
               <b>Uniform cell</b>, shown only for W2C-like phases, preserves starting axis ratios while keeping the refined volume.
               It is off in the WC/W2C preset because it changes the fit and is meant for explicit diagnostic comparisons.
@@ -1364,7 +1364,7 @@ function openXrdFittingGuide() {
       <li><strong>Size:</strong> per-phase isotropic crystallite-size broadening. Use when one phase is visibly broader than another.</li>
       <li><strong>Mustrain:</strong> per-phase microstrain broadening. Use when broadening increases in a strain-like way and size alone is not sufficient.</li>
       <li><strong>PO:</strong> March-Dollase preferred orientation. <code>fixed</code> uses the entered value; <code>refined</code> lets GSAS-II vary it; <code>off</code> disables it. PO changes relative reflection intensities, so it can trade off with phase fraction.</li>
-      <li><strong>Axis/value:</strong> the orientation direction and March-Dollase ratio. A value of 1.0 means no preferred orientation. Fixed values should come from a prior validated refinement, repeated related samples, or independent texture evidence.</li>
+      <li><strong>Axis/value:</strong> the orientation direction and March-Dollase ratio. Use h k l, or h k i l for hexagonal/trigonal phases; the redundant i index is converted before GSAS-II refinement. A value of 1.0 means no preferred orientation. Fixed values should come from a prior validated refinement, repeated related samples, or independent texture evidence.</li>
       <li><strong>Uniform cell:</strong> a diagnostic constraint for W2C-like phases. It changes the fit and should not be part of a general preset unless validated for that sample family.</li>
     </ul>
   </div>
@@ -2268,13 +2268,33 @@ function _ensurePhaseOptions() {
 
 function _phaseOptsToBackendJSON() {
   // Convert UI-friendly entries to backend phase_options structure.
-  return xrdPhaseOptions.map(o => {
+  return xrdPhaseOptions.map((o, i) => {
+    const ph = xrdPhases[i] || {};
     let axis = null;
+    let axisInput = null;
+    let axisNotation = null;
     if (o.po_axis && typeof o.po_axis === 'string') {
       const parts = o.po_axis.trim().split(/[\s,]+/).map(x => parseInt(x, 10));
-      if (parts.length === 3 && parts.every(n => !isNaN(n))) axis = parts;
+      if (parts.length === 3 && parts.every(n => !isNaN(n))) {
+        axis = parts;
+        axisInput = parts;
+        axisNotation = 'hkl';
+      } else if (parts.length === 4 && parts.every(n => !isNaN(n))) {
+        axis = parts;
+        axisInput = parts;
+        axisNotation = 'hkil';
+      }
     } else if (Array.isArray(o.po_axis)) {
-      axis = o.po_axis;
+      const parts = o.po_axis.map(x => parseInt(x, 10));
+      if (parts.length === 3 && parts.every(n => !isNaN(n))) {
+        axis = parts;
+        axisInput = parts;
+        axisNotation = 'hkl';
+      } else if (parts.length === 4 && parts.every(n => !isNaN(n))) {
+        axis = parts;
+        axisInput = parts;
+        axisNotation = 'hkil';
+      }
     }
     return {
       refine_size: !!o.refine_size,
@@ -2282,6 +2302,8 @@ function _phaseOptsToBackendJSON() {
       po_mode: o.po_mode || 'off',
       po_value: parseFloat(o.po_value || 1.0),
       po_axis: axis,
+      po_axis_input: axisInput,
+      po_axis_notation: axisNotation,
       uniform_cell: !!o.uniform_cell,
     };
   });
@@ -2376,8 +2398,8 @@ function renderSelectedPhases() {
         <option value="fixed" ${opts.po_mode==='fixed'?'selected':''}>fixed</option>
         <option value="refined" ${opts.po_mode==='refined'?'selected':''}>refined</option>
       </select>
-      <label style="display:flex;align-items:center;gap:3px;" title="PO direction h k l (space-separated). Use a physically plausible texture axis; hexagonal plate/needle textures often involve 0 0 1, but this is not automatic.">
-        axis [<input type="text" data-pi="${i}" data-key="po_axis" value="${opts.po_axis||''}" style="width:50px;font-size:11px;padding:1px 4px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:3px;text-align:center;">]
+      <label style="display:flex;align-items:center;gap:3px;" title="PO direction as h k l. Hexagonal/trigonal phases may also use four-index h k i l; the redundant i index is checked and converted before GSAS-II refinement.">
+        axis [<input type="text" data-pi="${i}" data-key="po_axis" value="${opts.po_axis||''}" style="width:68px;font-size:11px;padding:1px 4px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:3px;text-align:center;">]
       </label>
       <label style="display:flex;align-items:center;gap:3px;" title="March-Dollase ratio. 1 = no texture. Refine to infer a repeatable value, then fix only after validating against baseline fits or independent texture evidence.">
         value <input type="number" data-pi="${i}" data-key="po_value" value="${opts.po_value}" step="0.001" min="0.1" max="3.0" style="width:60px;font-size:11px;padding:1px 4px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:3px;">
@@ -2548,6 +2570,8 @@ function summarizeResultForPreset(data) {
       fwhm_reference_source: ph.fwhm_reference_source,
       preferred_orientation_value: ph.preferred_orientation_value,
       preferred_orientation_axis: ph.preferred_orientation_axis,
+      preferred_orientation_axis_input: ph.preferred_orientation_axis_input,
+      preferred_orientation_axis_notation: ph.preferred_orientation_axis_notation,
       preferred_orientation_mode: ph.preferred_orientation_mode,
       preferred_orientation_refined: ph.preferred_orientation_refined,
       delta_a_pct: ph.delta_a_pct,
@@ -2886,11 +2910,17 @@ function renderReusableFitParameters(data) {
     const poResultAxis = Array.isArray(ph.preferred_orientation_axis)
       ? ph.preferred_orientation_axis.join(' ')
       : '';
+    const poResultAxisInput = Array.isArray(ph.preferred_orientation_axis_input)
+      ? ph.preferred_orientation_axis_input.join(' ')
+      : '';
+    const poResultAxisNote = (poResultAxisInput && poResultAxisInput !== poResultAxis)
+      ? `, input ${poResultAxisInput}`
+      : '';
     const poResultMode = ph.preferred_orientation_mode
       ? String(ph.preferred_orientation_mode).replace(/_/g, ' ')
       : '';
     const poResultLine = ph.preferred_orientation_value != null
-      ? `${fmtResultValue(ph.preferred_orientation_value, 4)}${poResultAxis ? ` [${escHtml(poResultAxis)}]` : ''}${poResultMode ? ` (${escHtml(poResultMode)})` : ''}`
+      ? `${fmtResultValue(ph.preferred_orientation_value, 4)}${poResultAxis ? ` [${escHtml(poResultAxis)}]` : ''}${poResultAxisNote ? ` (${escHtml(poResultAxisNote.replace(/^, /, ''))})` : ''}${poResultMode ? ` (${escHtml(poResultMode)})` : ''}`
       : 'not active';
 
     const hapBits = [
@@ -3287,11 +3317,17 @@ function showXRDResults(data) {
     const poAxis = Array.isArray(ph.preferred_orientation_axis)
       ? ph.preferred_orientation_axis.join(' ')
       : '';
+    const poAxisInput = Array.isArray(ph.preferred_orientation_axis_input)
+      ? ph.preferred_orientation_axis_input.join(' ')
+      : '';
+    const poAxisInputNote = (poAxisInput && poAxisInput !== poAxis)
+      ? ` from ${poAxisInput}`
+      : '';
     const poMode = ph.preferred_orientation_mode
       ? String(ph.preferred_orientation_mode).replace(/_/g, ' ')
       : '';
     const poResultHtml = ph.preferred_orientation_value != null
-      ? `<div><span style="color:var(--muted);">PO = </span>${fmtResultValue(ph.preferred_orientation_value, 4)}${poAxis ? ` [${poAxis}]` : ''}${poMode ? ` (${poMode})` : ''}</div>`
+      ? `<div><span style="color:var(--muted);">PO = </span>${fmtResultValue(ph.preferred_orientation_value, 4)}${poAxis ? ` [${poAxis}]` : ''}${poAxisInputNote ? ` (${escHtml(poAxisInputNote.trim())})` : ''}${poMode ? ` (${poMode})` : ''}</div>`
       : '';
     pr.innerHTML += `
       <div style="background:var(--surface2);border:1px solid ${c};
