@@ -73,6 +73,7 @@ _FIXTURE_DIR = os.path.join(
     'fixtures')
 _LOCAL_FIXTURES = {
     'mp-2034': 'w2c_pbcn_mp_2034.cif',   # W2C Pbcn — see CIF-Audit_v1.md
+    'mp-129': 'mo_metal_bcc_im3m.cif',   # Mo bcc Im-3m — use RT conventional cell
 }
 
 
@@ -258,7 +259,7 @@ def _parse(entries):
                 be = _sf(lattice.get("beta"),  90.0)
                 ga = _sf(lattice.get("gamma"), 90.0)
 
-            results.append(conventionalize_phase_cell({
+            result = conventionalize_phase_cell({
                 "mp_id":             mp_id,
                 "cod_id":            mp_id,
                 "formula":           formula,
@@ -277,7 +278,24 @@ def _parse(entries):
                 "authors":           "Materials Project",
                 "journal":           "Comp.",
                 "source":            "mp",
-            }))
+            })
+
+            fixture_text = _fixture_cif_for(mp_id)
+            if fixture_text:
+                fixture = parse_cif(fixture_text)
+                for key in ('formula', 'a', 'b', 'c', 'alpha', 'beta',
+                            'gamma', 'spacegroup_number', 'system', 'Z'):
+                    if fixture.get(key) not in (None, ''):
+                        result[key] = fixture[key]
+                result['spacegroup'] = (
+                    fixture.get('spacegroup')
+                    or fixture.get('spacegroup_name')
+                    or result.get('spacegroup')
+                )
+                result['name'] = fixture.get('formula') or result.get('name')
+                result['_cif_text'] = fixture_text
+
+            results.append(result)
         except Exception:
             continue
     return results
@@ -312,6 +330,15 @@ def fetch_cif(mp_id, api_key):
     The new API has no dedicated /cif endpoint — we request 'structure'
     from the summary endpoint then convert via pymatgen.
     """
+    fixture_text = _fixture_cif_for(mp_id)
+    if fixture_text:
+        print(f"  fetch_cif: using local fixture for {mp_id} "
+              f"(no MP API call needed)", flush=True)
+        parsed = parse_cif(fixture_text)
+        parsed.update({"mp_id": mp_id, "cod_id": mp_id,
+                       "cif_text": fixture_text, "source": "mp"})
+        return parsed
+
     if not api_key:
         raise ValueError("No Materials Project API key configured.")
 
@@ -348,14 +375,6 @@ def fetch_cif(mp_id, api_key):
 
     # Convert pymatgen structure dict to CIF text
     cif_text = _structure_dict_to_cif(struct, mp_id, formula, sym)
-
-    # Local-fixture override: for known-problematic MP entries, substitute
-    # the audited canonical CIF (see _LOCAL_FIXTURES at top of this file).
-    fixture_text = _fixture_cif_for(mp_id)
-    if fixture_text:
-        print(f"  fetch_cif: using local fixture for {mp_id} "
-              f"(overrides round-tripped MP CIF)", flush=True)
-        cif_text = fixture_text
 
     parsed = parse_cif(cif_text)
     parsed.update({"mp_id": mp_id, "cod_id": mp_id,
