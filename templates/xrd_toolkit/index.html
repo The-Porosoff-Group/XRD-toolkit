@@ -2369,7 +2369,7 @@ function renderSelectedPhases() {
         a=${parseFloat(ph.a||0).toFixed(3)} c=${parseFloat(ph.c||0).toFixed(3)} Å
       </span>
       ${cifBadge}
-      <label style="font-size:10px;color:var(--muted);display:flex;align-items:center;gap:4px;" title="Formula units per unit cell (Z) — needed for accurate weight fractions via Hill & Howard method">
+      <label style="font-size:10px;color:var(--muted);display:flex;align-items:center;gap:4px;" title="Formula units per unit cell (Z); used as a fallback if GSAS-II phase mass is unavailable">
         Z=<input type="number" min="1" max="200" value="${zVal}" placeholder="?" style="width:40px;font-size:11px;padding:1px 4px;background:var(--surface);border:1px solid var(--border);color:var(--fg);border-radius:3px;"
           onchange="xrdPhases[${i}].Z=parseInt(this.value)||null">
       </label>
@@ -3354,6 +3354,8 @@ function showXRDResults(data) {
           <div><span style="color:var(--muted);">η @ ${Number(fwhmRef).toFixed(2)}° = </span>${ph.eta_at_fwhm_reference ?? ph.eta_at_40deg ?? ph.eta_at_strongest ?? ph.eta ?? '—'}</div>
           ${ph.Y != null ? `<div><span style="color:var(--muted);">Y = </span>${ph.Y} (size)</div>` : ''}
           ${ph.X != null ? `<div><span style="color:var(--muted);">X = </span>${ph.X} (strain)</div>` : ''}
+          ${ph.scale_sigma != null ? `<div><span style="color:var(--muted);">Scale sigma = </span>${ph.scale_sigma}${ph['scale_sigma_rel_%'] != null ? ` (${ph['scale_sigma_rel_%']}%)` : ''}</div>` : ''}
+          ${ph['integrated_phase_fraction_%'] != null ? `<div><span style="color:var(--muted);">Integrated phase = </span>${ph['integrated_phase_fraction_%']}%</div>` : ''}
           ${poResultHtml}
           <div${wtErrSource}><span style="color:var(--muted);">Wt% = </span>${ph['weight_fraction_%']}${ph['weight_fraction_err_%'] != null ? ' ± ' + ph['weight_fraction_err_%'] : ''}%${wtSource}</div>
           ${cellDeltaHtml}

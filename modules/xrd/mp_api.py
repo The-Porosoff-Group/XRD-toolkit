@@ -14,7 +14,7 @@ via raw REST — it causes a 400. Only request scalar/simple fields.
 """
 
 import os, re, requests, json
-from .crystallography import parse_cif
+from .crystallography import parse_cif, conventionalize_phase_cell
 from .cod_api import infer_system, _sf
 
 MP_SUMMARY = "https://api.materialsproject.org/materials/summary/"
@@ -258,7 +258,7 @@ def _parse(entries):
                 be = _sf(lattice.get("beta"),  90.0)
                 ga = _sf(lattice.get("gamma"), 90.0)
 
-            results.append({
+            results.append(conventionalize_phase_cell({
                 "mp_id":             mp_id,
                 "cod_id":            mp_id,
                 "formula":           formula,
@@ -277,7 +277,7 @@ def _parse(entries):
                 "authors":           "Materials Project",
                 "journal":           "Comp.",
                 "source":            "mp",
-            })
+            }))
         except Exception:
             continue
     return results

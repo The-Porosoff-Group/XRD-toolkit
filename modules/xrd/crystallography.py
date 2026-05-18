@@ -22,6 +22,123 @@ CRYSTAL_SYSTEMS = {
     'triclinic':    lambda a,b,c,al,be,ga: (a, b, c, al, be, ga),
 }
 
+_F_CUBIC_SGS = {196, 202, 203, 209, 210, 216, 219, 225, 226, 227, 228}
+_I_CUBIC_SGS = {197, 199, 204, 206, 211, 214, 217, 220, 229, 230}
+
+
+def _near(a, b, tol=1e-3):
+    try:
+        return abs(float(a) - float(b)) <= tol
+    except Exception:
+        return False
+
+
+def _composition_counts(formula):
+    counts = {}
+    for el, n in re.findall(r'([A-Z][a-z]?)([0-9.]*)', str(formula or '')):
+        try:
+            counts[el] = counts.get(el, 0.0) + (float(n) if n else 1.0)
+        except ValueError:
+            counts[el] = counts.get(el, 0.0) + 1.0
+    return counts
+
+
+def is_f_cubic_primitive_cell(a, b, c, al, be, ga, sg):
+    """True for the 60-degree primitive cell often used for F-cubic MP data."""
+    try:
+        return (
+            int(sg or 0) in _F_CUBIC_SGS
+            and _near(a, b)
+            and _near(a, c)
+            and _near(al, 60.0, 0.6)
+            and _near(be, 60.0, 0.6)
+            and _near(ga, 60.0, 0.6)
+        )
+    except Exception:
+        return False
+
+
+def is_i_cubic_primitive_cell(a, b, c, al, be, ga, sg):
+    """True for the 109.47-degree primitive cell often used for I-cubic MP data."""
+    try:
+        return (
+            int(sg or 0) in _I_CUBIC_SGS
+            and _near(a, b)
+            and _near(a, c)
+            and _near(al, 109.471, 0.6)
+            and _near(be, 109.471, 0.6)
+            and _near(ga, 109.471, 0.6)
+        )
+    except Exception:
+        return False
+
+
+def conventionalize_phase_cell(ph):
+    """Return phase dict with common primitive cells converted for UI/refinement.
+
+    Materials Project commonly exposes F-centered cubic structures as the
+    primitive rhombohedral cell (a=b=c, alpha=beta=gamma=60 deg). The toolkit
+    presents and refines those phases in the conventional cubic setting.
+    """
+    out = dict(ph or {})
+    try:
+        sg = int(out.get('spacegroup_number') or 1)
+        a = float(out.get('a'))
+        b = float(out.get('b', a))
+        c = float(out.get('c', a))
+        al = float(out.get('alpha', 90.0))
+        be = float(out.get('beta', 90.0))
+        ga = float(out.get('gamma', 90.0))
+    except (TypeError, ValueError):
+        return out
+
+    if is_f_cubic_primitive_cell(a, b, c, al, be, ga, sg):
+        a_conv = a * math.sqrt(2.0)
+        out.update({
+            'a': round(a_conv, 5),
+            'b': round(a_conv, 5),
+            'c': round(a_conv, 5),
+            'alpha': 90.0,
+            'beta': 90.0,
+            'gamma': 90.0,
+            'system': 'cubic',
+            'cell_setting': 'conventional_from_f_primitive',
+            'primitive_a': round(a, 5),
+        })
+    elif is_i_cubic_primitive_cell(a, b, c, al, be, ga, sg):
+        a_conv = a * 2.0 / math.sqrt(3.0)
+        out.update({
+            'a': round(a_conv, 5),
+            'b': round(a_conv, 5),
+            'c': round(a_conv, 5),
+            'alpha': 90.0,
+            'beta': 90.0,
+            'gamma': 90.0,
+            'system': 'cubic',
+            'cell_setting': 'conventional_from_i_primitive',
+            'primitive_a': round(a, 5),
+        })
+
+    # Normalize Z for common conventional cells where Materials Project
+    # search metadata may omit Z or expose a primitive setting.
+    try:
+        counts = _composition_counts(out.get('formula') or out.get('name'))
+        sg_out = int(out.get('spacegroup_number') or 0)
+        if len(counts) == 1:
+            if sg_out == 229:
+                out['Z'] = 2
+            elif sg_out == 223:
+                out['Z'] = 8
+        if sg_out == 225:
+            if set(counts) in ({'Mo', 'C'}, {'W', 'C'}):
+                vals = [v for v in counts.values() if v > 0]
+                if len(vals) == 2 and abs(vals[0] / vals[1] - 1.0) < 0.15:
+                    out['Z'] = 4
+    except Exception:
+        pass
+    return out
+
+
 def cell_volume(a, b, c, al, be, ga):
     """Unit cell volume in Å³."""
     al_r = math.radians(al)
@@ -463,6 +580,28 @@ def structure_factor_sq_dw(h, k, l, sites, sin_theta_over_lambda, B_iso_map=None
 # PATTERN GENERATION
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _species_occ_pairs(site):
+    """Return (element, occupancy) pairs from a pymatgen PeriodicSite."""
+    try:
+        species = getattr(site, 'species', None)
+        if species:
+            return [(str(sp), float(occ)) for sp, occ in species.items()]
+    except Exception:
+        pass
+    try:
+        return [(str(site.specie), 1.0)]
+    except Exception:
+        return []
+
+
+def _display_hkl(h, k, l, system):
+    """Canonical representative HKL for UI labels."""
+    hkl = (abs(h), abs(k), abs(l))
+    if (system or '').lower() == 'cubic':
+        return tuple(sorted(hkl, reverse=True))
+    return hkl
+
+
 def _expand_sites_by_symmetry(sites, spacegroup_number, a, b, c, al, be, ga):
     """Expand asymmetric-unit sites to full unit cell using pymatgen.
 
@@ -472,16 +611,22 @@ def _expand_sites_by_symmetry(sites, spacegroup_number, a, b, c, al, be, ga):
     try:
         from pymatgen.core import Structure, Lattice
         lat = Lattice.from_parameters(a, b, c, al, be, ga)
-        species = [s[0] for s in sites]
+        species = []
+        for s in sites:
+            occ = float(s[4]) if len(s) > 4 and s[4] is not None else 1.0
+            if abs(occ - 1.0) > 1e-8:
+                species.append({str(s[0]): occ})
+            else:
+                species.append(str(s[0]))
         coords = [[s[1], s[2], s[3]] for s in sites]
         struct = Structure.from_spacegroup(
             spacegroup_number, lat, species, coords, tol=0.01)
         full_sites = []
         for site in struct:
             fc = site.frac_coords % 1.0
-            el = str(site.specie)
-            full_sites.append((el, float(fc[0]), float(fc[1]),
-                               float(fc[2]), 1.0))
+            for el, occ in _species_occ_pairs(site):
+                full_sites.append((el, float(fc[0]), float(fc[1]),
+                                   float(fc[2]), occ))
         return full_sites
     except Exception:
         return None
@@ -496,8 +641,10 @@ def generate_reflections(a, b, c, al, be, ga, system, spacegroup_number,
 
     site_policy controls how sites are used for structure factor F²:
       'auto' (default) — expand asymmetric unit by symmetry before F²
-      'legacy_direct_sites' — use sites directly (old behavior, for
-          phases like MP W2C Pbcn where expansion corrupts coordinates)
+      'legacy_direct_sites' — use sites directly, while still applying the
+          SG absence filter
+      'direct_full_cell_sites' — use sites directly and let their structure
+          factors encode extinctions without SG pre-filtering
       'structure_expanded' — always expand (same as auto)
 
     If `sites` is provided (list of (element, x, y, z, occupancy) tuples),
@@ -520,12 +667,23 @@ def generate_reflections(a, b, c, al, be, ga, system, spacegroup_number,
     #   'auto'/'structure_expanded' — expand (default, needed for Si etc.)
     #   'legacy_direct_sites' — use sites directly (MP W2C Pbcn compat)
     full_sites = None
-    if sites is not None and spacegroup_number > 1:
-        if site_policy == 'legacy_direct_sites':
-            # Use sites as-is — caller guarantees they're full-cell
-            # or the old F² calculation was working with them directly.
+    direct_full_cell_sites = (
+        sites is not None
+        and site_policy in ('direct_full_cell_sites', 'source_full_cell')
+    )
+    use_direct_sites = (
+        sites is not None
+        and site_policy in ('legacy_direct_sites',
+                            'direct_full_cell_sites',
+                            'source_full_cell')
+    )
+    if sites is not None:
+        if use_direct_sites:
+            # Use sites as-is. legacy_direct_sites still applies the SG absence
+            # filter. direct_full_cell_sites is for source/conventional cells
+            # whose atom positions should decide extinctions directly.
             full_sites = sites
-        else:
+        elif spacegroup_number > 1:
             full_sites = _expand_sites_by_symmetry(
                 sites, spacegroup_number, a, b, c, al, be, ga)
             if full_sites is None:
@@ -549,7 +707,8 @@ def generate_reflections(a, b, c, al, be, ga, system, spacegroup_number,
                 if h == 0 and k == 0 and l == 0:
                     continue
 
-                if not is_allowed(h, k, l, spacegroup_number):
+                if (not direct_full_cell_sites
+                        and not is_allowed(h, k, l, spacegroup_number)):
                     continue
 
                 d = d_spacing(h, k, l, a, b, c, al, be, ga, system)
@@ -584,7 +743,7 @@ def generate_reflections(a, b, c, al, be, ga, system, spacegroup_number,
                         LP = ((1 + cos2t**2) / (sin_t**2 * cos_t)
                               if sin_t > 0 and cos_t > 0 else 1.0)
                         F2_LP = F2 * LP
-                    seen_d[d_key] = [two_theta, d, (abs(h), abs(k), abs(l)),
+                    seen_d[d_key] = [two_theta, d, _display_hkl(h, k, l, system),
                                      1, F2_LP]
 
     # Build final list with intensity weights.
@@ -680,7 +839,7 @@ def generate_reflections_rietveld(a, b, c, al, be, ga, system, spacegroup_number
                     seen_d[d_key] = {
                         'two_theta': two_theta,
                         'd': d,
-                        'hkl': (abs(h), abs(k), abs(l)),
+                        'hkl': _display_hkl(h, k, l, system),
                         'mult': 1,
                         'sin_theta_over_lambda': s,
                         'h_rep': h, 'k_rep': k, 'l_rep': l,
@@ -924,6 +1083,28 @@ def expand_sites_from_cif(cif_text):
     """
     if not cif_text:
         return None
+
+    # Prefer the lightweight parser plus symmetry expansion. Some hand-written
+    # CIFs include very large or unusual symmetry-operation loops that can make
+    # pymatgen's CifParser brittle, while the atom loop + IT number are enough
+    # for our powder-pattern structure factors.
+    try:
+        parsed = parse_cif(cif_text)
+        asym_sites = parsed.get('sites') or []
+        sg = int(parsed.get('spacegroup_number', 1) or 1)
+        if asym_sites and sg > 1:
+            expanded = _expand_sites_by_symmetry(
+                asym_sites, sg,
+                parsed.get('a'), parsed.get('b') or parsed.get('a'),
+                parsed.get('c') or parsed.get('a'),
+                parsed.get('alpha') or 90.0,
+                parsed.get('beta') or 90.0,
+                parsed.get('gamma') or 90.0)
+            if expanded and len(expanded) >= len(asym_sites):
+                return expanded
+    except Exception:
+        pass
+
     try:
         from pymatgen.io.cif import CifParser
         try:
@@ -940,12 +1121,12 @@ def expand_sites_from_cif(cif_text):
             sites = []
             for site in structs[0]:
                 frac = site.frac_coords % 1.0
-                el = str(site.specie)
-                occ = 1.0
-                if hasattr(site, 'properties') and 'occupancy' in site.properties:
-                    occ = float(site.properties['occupancy'])
-                sites.append((el, float(frac[0]), float(frac[1]),
-                              float(frac[2]), occ))
+                pairs = _species_occ_pairs(site)
+                if not pairs and hasattr(site, 'properties') and 'occupancy' in site.properties:
+                    pairs = [(str(site.specie), float(site.properties['occupancy']))]
+                for el, occ in pairs:
+                    sites.append((el, float(frac[0]), float(frac[1]),
+                                  float(frac[2]), occ))
             if sites:
                 return sites
     except BaseException:
@@ -1134,6 +1315,27 @@ _SG_SYMOPS = {
 # CIF PARSER
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _infer_formula_units_z(result):
+    """Infer Z for a small set of common CIFs that omit the tag."""
+    if result.get('Z'):
+        return result.get('Z')
+    try:
+        sg = int(result.get('spacegroup_number') or 0)
+        sites = result.get('sites') or []
+        if sg == 225 and len(sites) == 2:
+            coords = sorted(
+                (round(float(x) % 1.0, 4),
+                 round(float(y) % 1.0, 4),
+                 round(float(z) % 1.0, 4))
+                for _el, x, y, z, _occ in sites
+            )
+            if coords == [(0.0, 0.0, 0.0), (0.5, 0.5, 0.5)]:
+                return 4
+    except Exception:
+        pass
+    return None
+
+
 def parse_cif(cif_text):
     """
     Minimal CIF parser — extracts unit cell, space group, formula,
@@ -1220,6 +1422,9 @@ def parse_cif(cif_text):
     elif 143 <= sg <= 167: result['system'] = 'trigonal'
     elif 168 <= sg <= 194: result['system'] = 'hexagonal'
     elif 195 <= sg <= 230: result['system'] = 'cubic'
+
+    if result.get('Z') is None:
+        result['Z'] = _infer_formula_units_z(result)
 
     return result
 

@@ -213,7 +213,7 @@ MODULES = [
 def index():
     reaction_configs = gc_processor.list_reaction_configs(
         os.path.join(MODULES_DIR, 'reaction_configs'))
-    return render_template('xrd_toolkit/index.html',
+    return render_template('index.html',
                            modules=MODULES,
                            reaction_configs=reaction_configs,
                            mp_key_set=bool(MP_API_KEY),
@@ -922,7 +922,13 @@ def process_xrd():
             # Instrument from form (or auto-detect)
             _cal_instrument = form.get('instrument', '').strip().lower()
             if _cal_instrument in ('', 'auto'):
-                _cal_instrument = None  # let run_calibration auto-detect
+                from modules.xrd.gsasii_backend import infer_instrument
+                _cal_instrument, _cal_reason = infer_instrument(
+                    filepath=upload_path,
+                    metadata={'sample_id': sample_id, 'notes': notes},
+                )
+                print(f"  Calibration instrument auto-detected: "
+                      f"{_cal_instrument} ({_cal_reason})", flush=True)
 
             cal_result = run_calibration(
                 tt=data['tt'], y_obs=data['intensity'],
@@ -1169,7 +1175,7 @@ def process_xrd():
 # ── Launch ────────────────────────────────────────────────────────────────────
 
 def startup_url():
-    target = (os.environ.get('CATALYSIS_TOOLKIT_START_PATH') or '/xrd').strip()
+    target = (os.environ.get('CATALYSIS_TOOLKIT_START_PATH') or '/').strip()
     if target.startswith(('http://', 'https://')):
         return target
     if not target.startswith('/'):
