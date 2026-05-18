@@ -196,6 +196,8 @@ if errorlevel 1 (
 
 :: ── LAUNCH ──────────────────────────────────────────────────────────────
 :START_APP
+if /I "%~1"=="--batch" goto :RUN_BATCH
+if /I "%~1"=="--fetch-cifs" goto :RUN_FETCH_CIFS
 echo  Starting XRD Fitting Toolkit...
 echo  Opening browser at http://localhost:5000/xrd
 echo.
@@ -204,9 +206,37 @@ echo.
 
 python app.py
 
+goto :APP_DONE
+
+:RUN_BATCH
+set "BATCH_ARGS="
+:BUILD_BATCH_ARGS
+shift /1
+if "%~1"=="" goto :DO_BATCH
+set BATCH_ARGS=%BATCH_ARGS% "%~1"
+goto :BUILD_BATCH_ARGS
+:DO_BATCH
+echo  Running XRD batch workflow...
+echo.
+python scripts\xrd_batch.py %BATCH_ARGS%
+goto :APP_DONE
+
+:RUN_FETCH_CIFS
+set "FETCH_ARGS="
+:BUILD_FETCH_ARGS
+shift /1
+if "%~1"=="" goto :DO_FETCH
+set FETCH_ARGS=%FETCH_ARGS% "%~1"
+goto :BUILD_FETCH_ARGS
+:DO_FETCH
+echo  Fetching XRD CIF files...
+echo.
+python scripts\fetch_cifs.py %FETCH_ARGS%
+
+:APP_DONE
 echo.
 echo  ============================================
-echo  Server stopped. If this was unexpected,
+echo  Run finished. If this was unexpected,
 echo  check the error message above.
 echo  ============================================
 pause

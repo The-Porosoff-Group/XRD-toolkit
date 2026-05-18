@@ -56,6 +56,36 @@ The first run may take several minutes while Python dependencies and GSAS-II are
 
 For the WC/W2C workflow, the shipped preset fixes WC [001] March-Dollase preferred orientation near `0.905` because that value was established from repeated comparison fits. It is a production prior for that specific recipe, not a universal WC constant.
 
+## Terminal Batch Workflow
+
+After you validate a recipe in the GUI, save it as a preset and reuse it outside the GUI:
+
+```bat
+run_xrd_batch.bat ^
+  --patterns ..\data\*.xy ^
+  --preset "WC/W2C Synergy-S production" ^
+  --cif-dir ..\cifs\wc_w2c ^
+  --out ..\results\wc_w2c_batch
+```
+
+The batch launcher uses the same environment setup as the GUI launcher, then runs `scripts\xrd_batch.py`.
+
+Phases can come from:
+
+- the saved GUI preset
+- a folder of CIF files with `--cif-dir`
+- repeated `--cif path\phase.cif` arguments
+- Materials Project ids with `--mp-ids mp-2034 mp-your-wc-id`
+- a standalone recipe JSON with `--recipe`
+
+To create CIF files from Materials Project first:
+
+```bat
+fetch_cifs.bat --mp-ids mp-2034 mp-your-wc-id --out-dir ..\cifs\wc_w2c
+```
+
+Batch outputs include `batch_phase_summary.csv`, `batch_summary.json`, and per-sample folders with the usual plot, Excel summary, and compact `summary.json`.
+
 ## Important Files
 
 From the toolkit root:
@@ -66,7 +96,12 @@ templates/xrd_toolkit/index.html
                                XRD-only front end
 xrd_toolkit/run_xrd_toolkit.bat
                                Standalone Windows launcher
+xrd_toolkit/run_xrd_batch.bat  Standalone batch launcher
+xrd_toolkit/fetch_cifs.bat     Materials Project CIF fetch launcher
 xrd_toolkit/README.md          This standalone module README
+scripts/xrd_batch.py           Terminal batch refinement wrapper
+scripts/fetch_cifs.py          Materials Project CIF fetch helper
+recipes/                       Terminal recipe JSON files
 modules/xrd/                   XRD parsing, CIF, crystallography, and GSAS-II code
 fixtures/                      Canonical CIF fixtures
 config.yaml                    Local API-key config, not committed

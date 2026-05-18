@@ -1003,6 +1003,25 @@ def process_xrd():
                 'pymatgen_used': False,
                 'method':        'GSAS-II Calibration',
                 'instprm_path':  cal_result['instprm_path'],
+                'production_instprm_path':
+                    cal_result.get('production_instprm_path'),
+                'candidate_instprm_path':
+                    cal_result.get('candidate_instprm_path',
+                                   cal_result.get('instprm_path')),
+                'calibration_report_json':
+                    cal_result.get('calibration_report_json'),
+                'calibration_report_txt':
+                    cal_result.get('calibration_report_txt'),
+                'calibration_validation':
+                    cal_result.get('validation', {}),
+                'production_overwritten':
+                    cal_result.get('production_overwritten', False),
+                'calibration_peaks':
+                    cal_result.get('calibration_peaks', []),
+                'calibration_stage_log':
+                    cal_result.get('stage_log', []),
+                'calibration_profile_action':
+                    cal_result.get('profile_action'),
                 'output_dir':    out_dir,
             })
 
