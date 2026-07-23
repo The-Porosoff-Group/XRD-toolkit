@@ -503,7 +503,7 @@ def get_stick_pattern(structure, wavelength, tt_min=5.0, tt_max=90.0):
             # P1/no-symmetry CIFs from MP/CifWriter usually contain the
             # full unit cell. Use those positions directly while keeping
             # the selected phase SG for reflection-condition filtering.
-            sites = expand_sites_from_cif(cif_text) or raw_sites or None
+            sites = raw_sites or None
             if sites:
                 if (int(sg or 0) == 60
                         and (sys_ or '').lower() == 'orthorhombic'
@@ -513,7 +513,10 @@ def get_stick_pattern(structure, wavelength, tt_min=5.0, tt_max=90.0):
                         and len(sites) >= 8):
                     _sp = 'direct_full_cell_sites'
                 else:
-                    _sp = 'legacy_direct_sites'
+                    # Raw P1 source CIFs generally already list the source
+                    # cell contents. Expanding them with inferred symmetry can
+                    # be slow and can double-count sites in the preview layer.
+                    _sp = 'direct_full_cell_sites'
 
     # If we still have no sites, try building from formula + cell.
     # BUT: refuse to fabricate approximate sites for W2C Pbcn —

@@ -4,7 +4,7 @@ Local web server. Run with:  python app.py
 Then open:  http://localhost:5000
 """
 
-import os, sys, re, json, base64, webbrowser
+import os, sys, re, json, base64, webbrowser, traceback
 
 # Force unbuffered/line-buffered stdout so GSAS-II refinement progress
 # appears in terminal immediately.  os.environ alone doesn't work because
@@ -158,7 +158,8 @@ import gc_processor
 import tga_processor
 import bet_processor
 import xrd_processor
-from xrd.cif_cache import get_cache, cached_fetch_cod, cached_fetch_mp
+from xrd.cif_cache import (
+    get_cache, cached_fetch_cod, cached_fetch_mp, mp_normal_cache_key)
 from xrd.mp_api    import (search_by_elements  as mp_search_elements,
                             search_by_formula   as mp_search_formula,
                             search_by_name      as mp_search_name,
@@ -414,7 +415,7 @@ def xrd_search():
             cif_text = entry.pop('_cif_text', '')
             if cif_text and '_cell_length_a' in cif_text:
                 mp_id     = entry.get('mp_id', entry.get('cod_id', ''))
-                cache_key = f"mp:{mp_id}"
+                cache_key = mp_normal_cache_key(mp_id)
                 if mp_id and not _cache.has(cache_key):
                     _cache.put(cache_key, cif_text)
 
@@ -479,7 +480,8 @@ def xrd_fetch_cif():
         # from the CIF that also provides the atom positions.
         try:
             from xrd.mp_api import _fixture_cif_for as _fix_lookup
-            _has_fixture = bool(_fix_lookup(str(cod_id)))
+            _has_fixture = bool(
+                _fix_lookup(str(cod_id), purpose='normal_import'))
         except Exception:
             _has_fixture = False
 
@@ -493,13 +495,12 @@ def xrd_fetch_cif():
             print(f"  phase_hint merge: applied display/intent metadata "
                   f"only for {cod_id}; CIF cell remains authoritative.",
                   flush=True)
-
         # Store CIF text server-side; don't send over wire
         cif_text  = result.pop('cif_text', '')
-        cache_key = f"{'mp' if source=='mp' else 'cod'}:{cod_id}"
+        cache_key = (
+            mp_normal_cache_key(cod_id)
+            if source == 'mp' else f"cod:{cod_id}")
         _cache.put(cache_key, cif_text)
-        if source == 'mp':
-            _cache.put(f"{cache_key}:gsas:v1", cif_text)
 
         cif_check = {
             'status': 'error' if not cif_text else 'ok',
@@ -609,6 +610,317 @@ def xrd_fetch_cif():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/xrd/preview_cif', methods=['POST'])
+def xrd_preview_cif():
+    """Parse an uploaded CIF and compute backend stick-pattern preview."""
+    try:
+        data = request.get_json() or {}
+        cif_text = data.get('cif_text') or ''
+        filename = data.get('filename') or 'uploaded.cif'
+        wavelength = float(data.get('wavelength', 1.54056))
+        tt_min = float(data.get('tt_min', 5.0))
+        tt_max = float(data.get('tt_max', 100.0))
+        if not cif_text.strip():
+            return jsonify({'error': 'No CIF text provided'}), 400
+
+        from modules.xrd.crystallography import parse_cif as _parse_cif
+        parsed = _parse_cif(cif_text)
+        base_name = os.path.splitext(os.path.basename(filename))[0]
+        formula = (parsed.get('formula') or base_name).strip() or base_name
+        sites = parsed.get('sites') or []
+
+        phase = {
+            'name': base_name,
+            'formula': formula,
+            'a': parsed.get('a') or 4.0,
+            'b': parsed.get('b') or parsed.get('a') or 4.0,
+            'c': parsed.get('c') or parsed.get('a') or 4.0,
+            'alpha': parsed.get('alpha') or 90.0,
+            'beta': parsed.get('beta') or 90.0,
+            'gamma': parsed.get('gamma') or 90.0,
+            'system': parsed.get('system') or 'cubic',
+            'spacegroup': parsed.get('spacegroup') or '',
+            'spacegroup_number': parsed.get('spacegroup_number') or 1,
+            'Z': parsed.get('Z'),
+            'cod_id': 'manual',
+            'source': 'manual',
+            'cif_text': cif_text,
+            'sites': sites,
+        }
+
+        sticks = get_stick_pattern(phase, wavelength, tt_min=tt_min, tt_max=tt_max)
+        partial_sites = []
+        for el, _x, _y, _z, occ in sites:
+            try:
+                if abs(float(occ) - 1.0) > 1e-6:
+                    partial_sites.append(f"{el} occ={float(occ):g}")
+            except Exception:
+                pass
+
+        gamma_c_occ = None
+        try:
+            if int(phase.get('spacegroup_number') or 0) == 225:
+                for el, x, y, z, occ in sites:
+                    if (str(el).upper() == 'C'
+                            and abs(float(x) % 1.0 - 0.5) < 1e-4
+                            and abs(float(y) % 1.0 - 0.5) < 1e-4
+                            and abs(float(z) % 1.0 - 0.5) < 1e-4):
+                        gamma_c_occ = float(occ)
+                        break
+        except Exception:
+            gamma_c_occ = None
+
+        messages = [
+            f"CIF parsed as SG {phase['spacegroup_number']} with "
+            f"{len(sites)} atom site(s)."
+        ]
+        if partial_sites:
+            messages.append(
+                "Partial occupancy detected: "
+                + ", ".join(partial_sites)
+                + ". Current refinement uses the CIF occupancy as fixed."
+            )
+
+        cif_check = {
+            'status': 'ok',
+            'ok': True,
+            'parsed_sg': phase['spacegroup_number'],
+            'expected_sg': phase['spacegroup_number'],
+            'site_count': len(sites),
+            'cell': {
+                'a': phase['a'],
+                'b': phase['b'],
+                'c': phase['c'],
+                'alpha': phase['alpha'],
+                'beta': phase['beta'],
+                'gamma': phase['gamma'],
+            },
+            'messages': messages,
+        }
+
+        phase.pop('cif_text', None)
+        phase.pop('sites', None)
+        phase['stick_pattern'] = sticks
+        phase['stick_source'] = 'python_reflections'
+        if gamma_c_occ is not None:
+            phase['gamma_wc1x'] = True
+            phase['gamma_c_occupancy'] = gamma_c_occ
+            phase['gamma_vacancy_x'] = max(0.0, min(1.0, 1.0 - gamma_c_occ))
+        phase['cif_check'] = cif_check
+        phase['validation'] = cif_check
+        return jsonify({
+            **phase,
+            'preview': {
+                'stick_pattern': sticks,
+                'stick_source': 'python_reflections',
+            },
+            'phase': {
+                k: phase.get(k) for k in (
+                    'formula', 'name', 'spacegroup', 'spacegroup_number',
+                    'system', 'a', 'b', 'c', 'alpha', 'beta', 'gamma',
+                    'Z', 'source', 'cod_id')
+                if k in phase
+            },
+        })
+    except Exception as e:
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
+
+def _xrd_gamma_carbide_cif(metal, x_value, a_value=None):
+    """Generate a conventional Fm-3m gamma-MC1-x CIF with fixed C occupancy."""
+    metal = 'Mo' if str(metal).strip().lower().startswith('mo') else 'W'
+    x = max(0.0, min(0.3, float(x_value)))
+    occ = max(0.0, min(1.0, 1.0 - x))
+    defaults = {
+        'W': {'a0': 4.2355, 'a02': 4.1900, 'mp_id': 'mp-13136'},
+        'Mo': {'a0': 4.38296, 'a02': 4.33796, 'mp_id': 'mp-2746'},
+    }[metal]
+    if a_value not in (None, ''):
+        a = float(a_value)
+    else:
+        a = defaults['a0'] + (defaults['a02'] - defaults['a0']) * (x / 0.2)
+    if not (2.0 <= a <= 8.0):
+        raise ValueError('Generated cubic carbide lattice parameter is outside the allowed 2-8 A range.')
+    formula = f'{metal}C1-x'
+    occ_label = f'{occ:.3f}'.rstrip('0').rstrip('.')
+    data_name = f'gamma_{metal}C1-x_x{x:.3f}'.replace('.', 'p')
+    volume = a ** 3
+    cif_text = f"""# Generated by Catalysis Toolkit XRD gamma-carbide CIF generator.
+# Source model: rock-salt {metal}C1-x, Fm-3m (No. 225), conventional cell.
+# x = {x:.5f}; fixed carbon occupancy = {occ:.5f}; a = {a:.6f} A.
+# MP anchor: {defaults['mp_id']}; lattice interpolation is a user-facing
+# hypothesis generator, not an occupancy refinement.
+
+data_{data_name}
+_chemical_name_common                  'gamma-{metal}C1-x'
+_chemical_formula_sum                  '{metal}1 C{occ_label}'
+_chemical_formula_structural           '{formula}'
+_cell_length_a                         {a:.6f}
+_cell_length_b                         {a:.6f}
+_cell_length_c                         {a:.6f}
+_cell_angle_alpha                      90.00000
+_cell_angle_beta                       90.00000
+_cell_angle_gamma                      90.00000
+_cell_volume                           {volume:.5f}
+_cell_formula_units_Z                  4
+_symmetry_space_group_name_H-M         'F m -3 m'
+_symmetry_Int_Tables_number            225
+_space_group_name_H-M_alt              'F m -3 m'
+_space_group_IT_number                 225
+
+loop_
+  _space_group_symop_operation_xyz
+  'x, y, z'
+  '-x, -y, -z'
+  'x, y+1/2, z+1/2'
+  'x+1/2, y, z+1/2'
+  'x+1/2, y+1/2, z'
+  '-x, -y+1/2, -z+1/2'
+  '-x+1/2, -y, -z+1/2'
+  '-x+1/2, -y+1/2, -z'
+
+loop_
+  _atom_site_label
+  _atom_site_type_symbol
+  _atom_site_fract_x
+  _atom_site_fract_y
+  _atom_site_fract_z
+  _atom_site_occupancy
+  {metal}1  {metal}  0.000000  0.000000  0.000000  1.0000
+  C1   C   0.500000  0.500000  0.500000  {occ:.4f}
+"""
+    return cif_text, {
+        'formula': formula,
+        'name': f'gamma {metal}C1-x x={x:.3f}',
+        'a': a, 'b': a, 'c': a,
+        'alpha': 90.0, 'beta': 90.0, 'gamma': 90.0,
+        'system': 'cubic',
+        'spacegroup': 'Fm-3m',
+        'spacegroup_number': 225,
+        'Z': 4,
+        'source': 'generated',
+        'cod_id': f'generated:gamma-{metal.lower()}c1x-x{x:.3f}',
+        'mp_id': defaults['mp_id'],
+        'gamma_vacancy_x': x,
+        'gamma_c_occupancy': occ,
+        'generated_cif_model': 'gamma_carbide_fm3m_v1',
+        'generated_cif_note': (
+            'Fixed-composition generated CIF. Change x by generating a new CIF; '
+            'the phase card does not refine occupancy.'
+        ),
+    }
+
+
+@app.route('/api/xrd/generate_carbide_cif', methods=['POST'])
+def xrd_generate_carbide_cif():
+    """Generate a fixed-composition conventional CIF for gamma WC1-x/MoC1-x."""
+    try:
+        data = request.get_json() or {}
+        metal = data.get('metal', 'W')
+        x_value = data.get('x', 0.2)
+        a_value = data.get('a')
+        wavelength = float(data.get('wavelength', 1.54056))
+        tt_min = float(data.get('tt_min', 5.0))
+        tt_max = float(data.get('tt_max', 100.0))
+
+        cif_text, phase = _xrd_gamma_carbide_cif(metal, x_value, a_value)
+        phase_for_preview = dict(phase)
+        phase_for_preview['cif_text'] = cif_text
+        sticks = get_stick_pattern(
+            phase_for_preview, wavelength, tt_min=tt_min, tt_max=tt_max)
+        phase['stick_pattern'] = sticks
+        phase['stick_source'] = 'generated_cif_python_reflections'
+        phase['cif_text'] = cif_text
+        phase['cif_check'] = {
+            'status': 'ok',
+            'ok': True,
+            'parsed_sg': 225,
+            'expected_sg': 225,
+            'site_count': 2,
+            'cell': {
+                'a': phase['a'], 'b': phase['b'], 'c': phase['c'],
+                'alpha': 90.0, 'beta': 90.0, 'gamma': 90.0,
+            },
+            'messages': [
+                'Generated conventional Fm-3m CIF with fixed carbon occupancy.',
+                'Use a newly generated CIF for a different x; occupancy is not refined.'
+            ],
+        }
+        phase['validation'] = phase['cif_check']
+        return jsonify({
+            **phase,
+            'preview': {
+                'stick_pattern': sticks,
+                'stick_source': phase['stick_source'],
+            },
+        })
+    except Exception as e:
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
+
+def _xrd_apply_locked_cell_to_cif(ph):
+    """Rewrite CIF cell scalars when a GUI-refined cell was promoted/fixed."""
+    if not ph.get('cell_locked_from_fit') or not ph.get('cif_text'):
+        return
+    text = str(ph.get('cif_text') or '')
+    replacements = {
+        '_cell_length_a': ph.get('a'),
+        '_cell_length_b': ph.get('b'),
+        '_cell_length_c': ph.get('c'),
+        '_cell_angle_alpha': ph.get('alpha'),
+        '_cell_angle_beta': ph.get('beta'),
+        '_cell_angle_gamma': ph.get('gamma'),
+    }
+    for key, value in replacements.items():
+        try:
+            n = float(value)
+        except (TypeError, ValueError):
+            continue
+        formatted = f"{n:.5f}" if 'angle' in key else f"{n:.6f}"
+        pattern = re.compile(rf"(^\s*{re.escape(key)}\s+).*$",
+                             re.IGNORECASE | re.MULTILINE)
+        if pattern.search(text):
+            text = pattern.sub(rf"\g<1>{formatted}", text)
+        else:
+            text = f"{text.rstrip()}\n{key} {formatted}\n"
+    ph['cif_text'] = text
+
+
+def _xrd_normalize_conventional_z(ph):
+    """Normalize MP primitive F-cubic cells to the conventional phase card."""
+    try:
+        from modules.xrd.crystallography import conventionalize_phase_cell
+        ph.update(conventionalize_phase_cell(ph))
+    except Exception:
+        pass
+    return ph
+
+
+def _xrd_mark_adjustable_cubic_carbide(ph, cif_text):
+    """Flag rock-salt WC1-x/MoC1-x phases with editable C occupancy."""
+    try:
+        from modules.xrd.crystallography import parse_cif as _parse_cif
+        parsed = _parse_cif(cif_text or '')
+        sg = int((ph or {}).get('spacegroup_number')
+                 or parsed.get('spacegroup_number') or 0)
+        formula = str((ph or {}).get('formula')
+                      or parsed.get('formula') or '').lower()
+        if sg != 225 or not ('c' in formula and ('w' in formula or 'mo' in formula)):
+            return ph
+        for el, x, y, z, occ in parsed.get('sites') or []:
+            if (str(el).upper() == 'C'
+                    and abs(float(x) % 1.0 - 0.5) < 1e-4
+                    and abs(float(y) % 1.0 - 0.5) < 1e-4
+                    and abs(float(z) % 1.0 - 0.5) < 1e-4):
+                ph['gamma_wc1x'] = True
+                ph['gamma_c_occupancy'] = float(occ)
+                ph['gamma_vacancy_x'] = max(0.0, min(1.0, 1.0 - float(occ)))
+                break
+    except Exception:
+        pass
+    return ph
 
 
 @app.route('/api/xrd/mp_debug_cif', methods=['GET'])
@@ -852,13 +1164,10 @@ def process_xrd():
             if cid.startswith('mp-') and source == 'cod':
                 ph['source'] = 'mp'
                 source = 'mp'
-            cache_keys = [
-                f"{source}:{cid}:gsas:v1",
-                f"{source}:{cid}",
-                f"cod:{cid}",
-                f"mp:{cid}:gsas:v1",
-                f"mp:{cid}",
-            ]
+            cache_keys = (
+                [mp_normal_cache_key(cid)]
+                if source == 'mp'
+                else [f"{source}:{cid}", f"cod:{cid}"])
             text = None
             for cache_key in cache_keys:
                 text = _cache.get(cache_key)
@@ -901,8 +1210,11 @@ def process_xrd():
             # Re-attach CIF text
             source = cal_phase.get('source', 'cod')
             cid = str(cal_phase.get('cod_id', cal_phase.get('mp_id', '')))
-            for key_fmt in [f"{source}:{cid}:gsas:v1", f"{source}:{cid}",
-                            f"cod:{cid}", f"mp:{cid}:gsas:v1", f"mp:{cid}"]:
+            _cal_cache_keys = (
+                [mp_normal_cache_key(cid)]
+                if source == 'mp'
+                else [f"{source}:{cid}", f"cod:{cid}"])
+            for key_fmt in _cal_cache_keys:
                 text = _cache.get(key_fmt)
                 if text:
                     cal_phase['cif_text'] = text
@@ -1134,7 +1446,8 @@ def process_xrd():
                     form.get('verify_refine_w2c_mustrain', '').lower() == 'true',
                 # Generic per-phase refinement options.  JSON-serialized
                 # list of dicts (one per phase, by index) with keys
-                # refine_size, refine_mustrain, po_mode, po_value, po_axis.
+                # refine_cell, refine_uiso, refine_size, refine_mustrain,
+                # po_mode, po_value, po_axis.
                 # Frontend builds this from the per-phase control cards.
                 'phase_options':
                     (lambda _raw: (
@@ -1158,6 +1471,8 @@ def process_xrd():
             'displacement_um':    result.get('displacement_um'),
             'displacement_param': result.get('displacement_param'),
             'fit_warnings':  result.get('warnings', []),
+            'refinement_diagnostics': result.get(
+                'refinement_diagnostics', {}),
             'pymatgen_used': result.get('pymatgen_used', False),
             'method':        result.get('method', 'Le Bail'),
             'summary_path':  result['summary_path'],

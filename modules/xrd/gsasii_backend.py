@@ -38,6 +38,17 @@ class _IsolationSkipped(Exception):
     pass
 
 
+def _configure_console_output():
+    """Prevent Windows legacy consoles from aborting on diagnostic text."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, 'reconfigure', None)
+        if callable(reconfigure):
+            try:
+                reconfigure(errors='replace')
+            except (AttributeError, OSError, ValueError):
+                pass
+
+
 # ── GSAS-II availability check ──────────────────────────────────────────────
 
 _GSASII_AVAILABLE = False
@@ -61,11 +72,13 @@ _add_gsas2pkg_paths()
 try:
     # New-style import (pip-installed from GitHub, or gsas2pkg via GSAS-II subpackage)
     import GSASII.GSASIIscriptable as G2sc
+    import GSASII.GSASIIpwd as G2pwd
     _GSASII_AVAILABLE = True
 except ImportError:
     try:
         # Direct import (gsas2pkg installs GSASII/ dir; backcompat or GSASII on path)
         import GSASIIscriptable as G2sc
+        import GSASIIpwd as G2pwd
         _GSASII_AVAILABLE = True
     except ImportError as e:
         _GSASII_IMPORT_ERROR = str(e)
@@ -1830,6 +1843,136 @@ def _extract_instrument_params(histogram):
         return {'U': 0, 'V': 0, 'W': 0.1, 'X': 0, 'Y': 0}
 
 
+def _run_refinement_steps(gpx, refinement_dicts):
+    """Run GSAS-II refinement steps with the requested cycle controls.
+
+    GSASIIscriptable refinement dictionaries configure refinement flags, but
+    ``cycles`` is a project Control and is ignored inside ``set_refinement``.
+    Apply it explicitly before each step and remove it from the recipe passed
+    to ``do_refinements``.
+    """
+    for refinement in refinement_dicts or [{}]:
+        clean = dict(refinement or {})
+        requested_cycles = clean.pop('cycles', None)
+        if requested_cycles is not None:
+            gpx.set_Controls('cycles', int(requested_cycles))
+        gpx.do_refinements([clean])
+
+
+def _covariance_diagnostics(cov_data, correlation_limit=0.95):
+    """Return compact convergence/correlation diagnostics from GSAS-II."""
+    result = {
+        'converged': None,
+        'delta_chi2': None,
+        'max_shift_esd': None,
+        'message': '',
+        'high_correlations': [],
+    }
+    if not isinstance(cov_data, dict):
+        return result
+
+    rvals = cov_data.get('Rvals') or {}
+    if isinstance(rvals, dict):
+        if rvals.get('converged') is not None:
+            result['converged'] = bool(rvals.get('converged'))
+        for source, target in (
+                ('DelChi2', 'delta_chi2'),
+                ('Max shft/sig', 'max_shift_esd')):
+            try:
+                value = float(rvals.get(source))
+                if math.isfinite(value):
+                    result[target] = value
+            except (TypeError, ValueError):
+                pass
+        result['message'] = str(rvals.get('msg') or '').strip()
+
+    names = list(cov_data.get('varyList') or [])
+    try:
+        matrix = np.asarray(cov_data.get('covMatrix'), dtype=float)
+        sigmas = np.asarray(cov_data.get('sig'), dtype=float)
+        if (matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1]
+                and matrix.shape[0] == len(names)
+                and sigmas.size == len(names)):
+            denom = np.outer(sigmas, sigmas)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                corr = np.divide(
+                    matrix, denom,
+                    out=np.zeros_like(matrix, dtype=float),
+                    where=denom > 0)
+            pairs = []
+            for i in range(len(names)):
+                for j in range(i + 1, len(names)):
+                    value = float(corr[i, j])
+                    if math.isfinite(value) and abs(value) >= correlation_limit:
+                        pairs.append({
+                            'parameter_1': str(names[i]),
+                            'parameter_2': str(names[j]),
+                            'correlation_pct': round(value * 100.0, 2),
+                        })
+            result['high_correlations'] = sorted(
+                pairs, key=lambda item: abs(item['correlation_pct']),
+                reverse=True)[:12]
+    except (TypeError, ValueError):
+        pass
+    return result
+
+
+def _get_project_covariance_data(gpx):
+    """Read covariance data across supported GSAS-II project layouts."""
+    for getter in (
+            lambda: gpx.data.get('Covariance', {}).get('data', {}),
+            lambda: gpx.data.get('Covariance', {}),
+            lambda: gpx['Covariance']['data'] if 'Covariance' in gpx else {}):
+        try:
+            data = getter()
+            if isinstance(data, dict) and data.get('varyList') is not None:
+                return data
+        except (KeyError, TypeError, AttributeError):
+            continue
+    return {}
+
+
+def _prepared_cif_reference(cif_text, fallback=None):
+    """Return the axis-consistent reference model from the CIF sent to GSAS."""
+    fallback = fallback or {}
+    try:
+        parsed = parse_cif(cif_text or '')
+    except Exception:
+        parsed = {}
+
+    def _number(key, default):
+        try:
+            value = float(parsed.get(key, fallback.get(key, default)))
+            return value if math.isfinite(value) else float(default)
+        except (TypeError, ValueError):
+            return float(default)
+
+    a = _number('a', 0.0)
+    b = _number('b', a)
+    c = _number('c', a)
+    alpha = _number('alpha', 90.0)
+    beta = _number('beta', 90.0)
+    gamma = _number('gamma', 90.0)
+    return {
+        'a': a,
+        'b': b,
+        'c': c,
+        'alpha': alpha,
+        'beta': beta,
+        'gamma': gamma,
+        'volume': cell_volume(a, b, c, alpha, beta, gamma),
+        'spacegroup_number': int(
+            parsed.get('spacegroup_number')
+            or fallback.get('spacegroup_number') or 1),
+        'spacegroup': (
+            parsed.get('spacegroup')
+            or parsed.get('spacegroup_name')
+            or fallback.get('spacegroup') or ''),
+        'site_count': len(parsed.get('sites') or []),
+        'source': 'prepared_gsas_cif',
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN ENTRY POINT
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1889,6 +2032,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
 
     Returns dict compatible with Le Bail / Rietveld output (same keys).
     """
+    _configure_console_output()
     print("\n=== GSAS-II REFINEMENT START ===", flush=True)
     if not _GSASII_AVAILABLE:
         raise RuntimeError(
@@ -1922,11 +2066,9 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
     background_mode      = options.get('background_mode', 'auto')
     exclude_regions      = options.get('exclude_regions', [])
     phase_sensitivity    = options.get('phase_sensitivity', False)
-    # Verification mode: skip Stage 3 (cell), Stage 4 (Uiso+MD), Stage 4b
-    # (size), and disable cell refinement in Stage 6.  First-pass test for
-    # a new sample/CIF combination — refines only background, scales,
-    # displacement, and Y, so position/width problems become visible
-    # without being absorbed by the more flexible parameters.
+    # Verification mode keeps structural terms off by default. Per-phase
+    # Cell, Size, Mustrain, and PO controls can deliberately reopen one
+    # mechanism at a time in the staged workflow.
     verification_mode    = options.get('verification_mode', False)
     # When verification_mode AND verify_refine_cell are both True, Stage 3
     # (per-phase cell with divergence checks) still skips, but Stage 6
@@ -2029,7 +2171,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
               flush=True)
     # Per-phase refinement options (dynamic, phase-agnostic).
     # phase_options is a list (one entry per phase, indexed) of dicts:
-    #   {"refine_size": bool, "refine_mustrain": bool,
+    #   {"refine_cell": bool, "refine_size": bool, "refine_mustrain": bool,
     #    "po_mode": "off"|"fixed"|"refined",
     #    "po_value": float, "po_axis": [h, k, l] or hex [h, k, i, l]}
     # When provided, the backend applies these per-phase by index instead
@@ -2078,6 +2220,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         wins over legacy WC/W2C name-based options.  Returns a dict with
         all keys present (None/defaults for unspecified)."""
         defaults = {
+            'refine_cell': False,
             'refine_size': False,
             'refine_mustrain': False,
             'po_mode': 'off',
@@ -2168,15 +2311,15 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
               flush=True)
     if verification_mode:
         if verify_refine_cell:
-            print("  VERIFICATION + CELL MODE: Uiso, MD, size, and XYZ "
-                  "still skipped.  Cell refines in Stage 6 only.  "
-                  "Refining bg + scales + displacement + Y + cell.",
+            print("  VERIFICATION + CELL MODE: Uiso and XYZ stay off. "
+                  "Selected phase cells refine in Stage 6; per-phase "
+                  "Size/Mustrain/PO controls remain authoritative.",
                   flush=True)
         else:
-            print("  VERIFICATION MODE: cell, Uiso, MD, size, and XYZ "
-                  "stages will be skipped.  Refining bg + scales + "
-                  "displacement + Y only.  Add cell refinement in a "
-                  "follow-up run once peaks land in the right place.",
+            print("  VERIFICATION MODE: cells, Uiso, and XYZ stay off by "
+                  "default. Per-phase Size/Mustrain/PO controls may open "
+                  "one selected mechanism; otherwise only background, "
+                  "scale, position, and shared width refine.",
                   flush=True)
         refine_xyz = False  # never refine atom positions in verification mode
 
@@ -2290,10 +2433,10 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         _measured_instprm = True
         print(f"Using MEASURED instrument parameters: {instprm_file}",
               flush=True)
-        print(f"  → U/V/W/X/SH/L and Zero fixed; Y may refine for "
-              f"sample size broadening."
-              f"\n  → Refining: displacement, Y, scale, cell, BG"
-              f"  (and Size/Uiso unless verification_mode).",
+        print(f"  -> U/V/W/X/Y/SH/L and Zero start from the measured "
+              f"profile."
+              f"\n  -> The staged workflow opens shared Y only when no "
+              f"per-phase Size/Mustrain term is selected.",
               flush=True)
         # Populate est_* with defaults for downstream reset targets; the
         # user .instprm controls actual refinement starting values.
@@ -2347,6 +2490,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
 
     cif_paths = []
     gsas_cif_texts = []  # Store CIF text sent to GSAS-II for each phase
+    prepared_gsas_models = []
     for i, ph in enumerate(phases):
         # Build a synthetic CIF from the phase dict's (conventional) cell
         # parameters.  This guarantees GSAS-II sees the correct space group
@@ -2354,6 +2498,8 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         # setting (common with Materials Project data).
         cif_for_gsas = _build_conventional_cif(ph)
         gsas_cif_texts.append(cif_for_gsas)
+        prepared_gsas_models.append(
+            _prepared_cif_reference(cif_for_gsas, ph))
 
         # ── W2C / mp-2034 emergency guard ─────────────────────────────
         # The fixture pipeline must produce a Pbcn (SG 60) CIF for
@@ -2507,6 +2653,9 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                             phasename=phasename,
                             histograms=[histogram],
                         )
+                        gsas_cif_texts[i] = orig_cif
+                        prepared_gsas_models[i] = _prepared_cif_reference(
+                            orig_cif, ph)
                         warnings.warn(
                             f"Synthetic CIF failed for '{ph.get('name', '?')}', "
                             f"using original CIF text (error: {e1})")
@@ -2748,13 +2897,31 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         # Track which stage succeeded (for fallback on failure)
         last_good_stage = 0
         _failed_stages = []
+        _stage_diagnostics = []
 
         # ── Helper to safely run a refinement stage ──────────────────────
         def _safe_refine(stage_name, refinement_dicts, stage_num):
             nonlocal last_good_stage
             try:
-                gpx.do_refinements(refinement_dicts)
+                _run_refinement_steps(gpx, refinement_dicts)
                 last_good_stage = stage_num
+                _diag = _covariance_diagnostics(
+                    _get_project_covariance_data(gpx))
+                _diag.update({
+                    'stage': stage_name,
+                    'stage_number': stage_num,
+                    'requested_cycles': max(
+                        [int(item.get('cycles', 0))
+                         for item in (refinement_dicts or [])
+                         if isinstance(item, dict)] or [0]),
+                    'failed': False,
+                })
+                _stage_diagnostics.append(_diag)
+                if _diag.get('converged') is False:
+                    print(
+                        f"  Stage diagnostic: '{stage_name}' reached its "
+                        f"cycle limit without GSAS-II convergence.",
+                        flush=True)
                 # Guard: ensure histogram scale stays fixed at 1.0.
                 # GSAS-II's do_refinements can re-enable it internally
                 # when 'Scale' appears in any refinement dict.
@@ -2767,6 +2934,16 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                 # GSAS-II internally restores from .bak0.gpx on failure,
                 # so the project state reverts to pre-refinement. Safe to continue.
                 _failed_stages.append(stage_name)
+                _stage_diagnostics.append({
+                    'stage': stage_name,
+                    'stage_number': stage_num,
+                    'requested_cycles': max(
+                        [int(item.get('cycles', 0))
+                         for item in (refinement_dicts or [])
+                         if isinstance(item, dict)] or [0]),
+                    'failed': True,
+                    'error': str(e),
+                })
                 warnings.warn(f"GSAS-II: {stage_name} failed ({e}). "
                              f"Continuing with results from stage {last_good_stage}.")
                 return False
@@ -2921,6 +3098,19 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         #            SH/L (instrument constant, 99.9% correlated with Zero)
         _displace_stg2 = ('DisplaceX' if geometry == 'bragg_brentano'
                           else 'DisplaceY')
+        _any_hap_size_requested = bool(
+            refine_size_opt or any(
+                _phase_opts_for(
+                    idx, ph.get('name') or ph.get('formula') or '')
+                .get('refine_size')
+                for idx, ph in enumerate(phases)))
+        _any_hap_mustrain_requested = bool(any(
+            _phase_opts_for(
+                idx, ph.get('name') or ph.get('formula') or '')
+            .get('refine_mustrain')
+            for idx, ph in enumerate(phases)))
+        _any_hap_broadening_requested = (
+            _any_hap_size_requested or _any_hap_mustrain_requested)
         # When a measured .instprm is loaded, U/V/W/X/Y are FIXED —
         # only Zero and displacement refine alongside background.
         # This is the whole point of the measured standard: instrument
@@ -2932,16 +3122,28 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             # they're instrument-determined.  Zero is also fixed; all
             # position correction goes through DisplaceX/Y.
             #
-            # Y (Lorentzian, FWHM ~ Y/cos θ) STAYS REFINABLE because it
-            # absorbs sample size broadening.  A Si standard pins the
-            # instrumental Y; nanocrystalline samples need additional
-            # Y on top of that.  Locking Y at the Si value would force
-            # nano peaks to look like bulk-Si peaks → broken fit for
-            # WC/W2C (~9 nm crystallites).
-            _inst_params_stg2 = ['Y']
-            _stg2_label = 'bg + displacement + Y (U/V/W/X/SH/L/Zero fixed by instprm)'
-            print(f"  Stage 2: U/V/W/X/SH/L/Zero fixed at instprm values; "
-                  f"Y refinable for sample size broadening.", flush=True)
+            # When no per-phase HAP broadening is selected, Y remains the
+            # shared sample-width handle. When Size/Mustrain is selected,
+            # Y stays fixed at the calibrated value so sample broadening is
+            # represented exactly once by the phase HAP terms.
+            if _any_hap_broadening_requested:
+                _inst_params_stg2 = []
+                _stg2_label = (
+                    'bg + displacement (measured profile fixed; '
+                    'sample broadening handled per phase)')
+                print(
+                    "  Stage 2: measured U/V/W/X/Y/SH/L/Zero fixed because "
+                    "per-phase Size/Mustrain is active.",
+                    flush=True)
+            else:
+                _inst_params_stg2 = ['Y']
+                _stg2_label = (
+                    'bg + displacement + Y '
+                    '(U/V/W/X/SH/L/Zero fixed by instprm)')
+                print(
+                    "  Stage 2: U/V/W/X/SH/L/Zero fixed at instprm values; "
+                    "Y refinable as a shared baseline width.",
+                    flush=True)
         elif verification_mode:
             # No measured instprm + verification_mode: tighten the profile
             # to reduce X↔Y correlation.  X is fixed at 0 (strain second-
@@ -2956,8 +3158,14 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                   f"refining U, W, Y; V/X/Zero/SH/L held fixed.",
                   flush=True)
         else:
-            _inst_params_stg2 = ['U', 'W', 'X', 'Y', 'Zero']
-            _stg2_label = 'profile + bg + zero + displacement'
+            # Conservative uncalibrated profile. X is added only through the
+            # explicit Free X control below, and Zero is mutually exclusive
+            # with sample displacement. V stays fixed because it is strongly
+            # correlated with U/W over typical laboratory scan ranges.
+            _inst_params_stg2 = ['U', 'W', 'Y']
+            _stg2_label = (
+                'profile + bg + displacement + U + W + Y '
+                '(V/X/Zero/SH/L fixed)')
 
         # Swap Zero ↔ Displace (when verify_use_zero_not_displace is on):
         # Add Zero to the refinable list, drop displacement from the
@@ -2984,7 +3192,12 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
 
         # Diagnostic: add X (Lorentzian strain) to the refine list.
         # Stacks on top of any of the above branches.
-        if refine_x_opt and 'X' not in _inst_params_stg2:
+        if refine_x_opt and _any_hap_mustrain_requested:
+            print(
+                "  Stage 2: Free X ignored because per-phase Mustrain is "
+                "active; refining both would duplicate strain broadening.",
+                flush=True)
+        elif refine_x_opt and 'X' not in _inst_params_stg2:
             _inst_params_stg2 = list(_inst_params_stg2) + ['X']
             _stg2_label = _stg2_label + ' +X'
 
@@ -3154,6 +3367,16 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                 print(f"  Skipping cell refinement for phase {idx} "
                       f"(negligible scale).", flush=True)
                 continue
+            _popts_cell = _phase_opts_for(idx, getattr(phase_obj, 'name', ''))
+            _legacy_cell_default = not phase_options_list
+            if not bool(_popts_cell.get('refine_cell') or _legacy_cell_default):
+                print(f"  Stage 3 (cell): phase {idx} cell fixed "
+                      f"(phase option refine_cell is off).", flush=True)
+                try:
+                    phase_obj.set_refinements({'Cell': False})
+                except Exception:
+                    pass
+                continue
             sys_ = (ph_input.get('system') or 'triclinic').lower()
             # For high-symmetry systems, clamp angles before refining
             # to prevent them from drifting to unphysical values.
@@ -3313,8 +3536,11 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             print("  Stage 4b (HAP size/mustrain): running in "
                   "verification_mode.", flush=True)
 
-        # Per-phase decision and refinement-flag setting
-        _stage4b_anything_set = False
+        # Per-phase decision and refinement-flag setting. Size is introduced
+        # before Mustrain so two strongly coupled broadening terms do not both
+        # start from GSAS-II defaults in the same least-squares step.
+        _stage4b_size_set = False
+        _stage4b_mustrain_set = False
         for idx, phase_obj in enumerate(gsas_phases):
             if not _run_stage4b:
                 continue
@@ -3327,31 +3553,49 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
 
             if _enable_size:
                 try:
+                    phase_obj.clear_HAP_refinements({'Mustrain': False})
                     phase_obj.set_HAP_refinements(
                         {'Size': {'type': 'isotropic', 'refine': True}})
                     print(f"  Phase {idx} ({_ph_label}): Size refinement "
                           f"enabled (isotropic).", flush=True)
-                    _stage4b_anything_set = True
+                    _stage4b_size_set = True
                 except Exception as e:
                     print(f"  Phase {idx}: could not enable Size "
                           f"refinement: {e}", flush=True)
+
             if _enable_mustrain:
+                _stage4b_mustrain_set = True
+
+        if _run_stage4b and _stage4b_size_set:
+            _safe_refine('HAP per-phase: size', [{
+                'set': {},
+                'cycles': min(max_cycles, 8 * _cyc_mult),
+            }], 4)
+
+        # Add Mustrain only after the size-only step has stabilized.
+        if _run_stage4b and _stage4b_mustrain_set:
+            for idx, phase_obj in enumerate(gsas_phases):
+                if idx in _negligible_phases:
+                    continue
+                _popts = _resolved_phase_opts[idx]
+                if not bool(_popts.get('refine_mustrain')):
+                    continue
+                _ph_label = getattr(phase_obj, 'name', f'phase{idx}')
                 try:
                     phase_obj.set_HAP_refinements(
                         {'Mustrain': {'type': 'isotropic', 'refine': True}})
                     print(f"  Phase {idx} ({_ph_label}): Mustrain "
                           f"refinement enabled (isotropic).", flush=True)
-                    _stage4b_anything_set = True
                 except Exception as e:
                     print(f"  Phase {idx}: could not enable Mustrain "
                           f"refinement: {e}", flush=True)
-
-        if _run_stage4b and _stage4b_anything_set:
-            _safe_refine('HAP per-phase: size and/or mustrain', [{
+            _safe_refine('HAP per-phase: add mustrain', [{
                 'set': {},
                 'cycles': min(max_cycles, 8 * _cyc_mult),
             }], 4)
-        elif _run_stage4b:
+
+        if (_run_stage4b and not _stage4b_size_set
+                and not _stage4b_mustrain_set):
             print("  Stage 4b: no phases matched any HAP option, "
                   "skipping refinement call.", flush=True)
 
@@ -3455,34 +3699,46 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                 pass
 
         if progress_callback:
-            progress_callback('GSAS-II: stage 6 — final all-together refinement...')
+            progress_callback(
+                'GSAS-II: stage 6 - final constrained refinement...')
 
-        # ── Stage 6: Final all-together refinement ──────────────────────
-        # Refine background, profile (U, W, X, Y, Zero), scales, and cell
-        # parameters simultaneously.  Uiso is frozen at the Stage 4 value
+        # Stage 6: final constrained refinement.
+        # Refine background, explicitly selected profile/position terms,
+        # scales, and selected phase cells simultaneously. Uiso is frozen at
+        # the Stage 4 value
         # to avoid SVD singularity (Uiso ↔ scale correlation is too strong
         # for heavy elements like W with limited lab XRD reflections).
-        # Cell is re-enabled; Uiso stays frozen (determined in Stage 4).
+        # Cell is re-enabled only for selected phases; Uiso stays frozen.
         #
         # Cell-refinement gate for Stage 6:
         #   verification_mode=True, verify_refine_cell=False  → Cell fixed
         #   verification_mode=True, verify_refine_cell=True   → Cell on
         #   verification_mode=False                            → Cell on (default)
+        _legacy_cell_default = not phase_options_list
         if verification_mode and not verify_refine_cell:
             print("  Stage 6: cell refinement disabled (verification_mode).",
                   flush=True)
-            for idx, phase_obj in enumerate(gsas_phases):
-                try:
-                    phase_obj.set_refinements({'Cell': False})
-                except Exception:
-                    pass
-        else:
-            if verification_mode and verify_refine_cell:
-                print("  Stage 6: cell refinement enabled "
-                      "(verify_refine_cell=True).", flush=True)
-            for idx, phase_obj in enumerate(gsas_phases):
-                if idx not in _negligible_phases:
-                    phase_obj.set_refinements({'Cell': True})
+        elif verification_mode and verify_refine_cell:
+            print("  Stage 6: global cell gate enabled; per-phase Cell "
+                  "checkboxes decide which phases can move.", flush=True)
+
+        for idx, phase_obj in enumerate(gsas_phases):
+            try:
+                _allow_cell = (
+                    idx not in _negligible_phases
+                    and not (verification_mode and not verify_refine_cell)
+                    and bool(
+                        _phase_opts_for(
+                            idx, getattr(phase_obj, 'name', '')
+                        ).get('refine_cell')
+                        or _legacy_cell_default
+                    )
+                )
+                phase_obj.set_refinements({'Cell': bool(_allow_cell)})
+                if not _allow_cell:
+                    print(f"  Stage 6: phase {idx} cell fixed.", flush=True)
+            except Exception:
+                pass
 
         # ── Snapshot W2C cell BEFORE Stage 6 (for uniform-scale post-fit) ──
         _uniform_scale_snapshot = {}    # idx → (a0, b0, c0, V0)
@@ -3518,13 +3774,18 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         print(f"  Stage 6: displacement model = {_displace_param} "
               f"(geometry={geometry})", flush=True)
 
-        # With measured .instprm: fix U/V/W/X (instrument-determined) and
-        # Zero/SH/L (geometric).  Y stays refinable to absorb sample size
-        # broadening — see Stage 2 comment.
+        # With measured .instprm, fix instrument-determined profile terms.
+        # Y is shared only when no per-phase HAP broadening is selected.
         if _measured_instprm:
-            _inst_params_stg6 = ['Y']
-            _stg6_label = ('final: cell + bg + displacement + Y '
-                           '(U/V/W/X/SH/L/Zero fixed by instprm)')
+            if _any_hap_broadening_requested:
+                _inst_params_stg6 = []
+                _stg6_label = (
+                    'final: selected cell/HAP + bg + displacement '
+                    '(measured profile fixed)')
+            else:
+                _inst_params_stg6 = ['Y']
+                _stg6_label = ('final: selected cell + bg + displacement + Y '
+                               '(U/V/W/X/SH/L/Zero fixed by instprm)')
         elif verification_mode:
             # No measured instprm + verification_mode: same restricted
             # profile as Stage 2 — U, W, Y only.  Cell is gated separately
@@ -3534,8 +3795,13 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             _stg6_label = (f'verify-final: bg + displacement + U + W + Y '
                            f'({_cell_state}; V/X/Zero/SH/L fixed)')
         else:
-            _inst_params_stg6 = ['U', 'W', 'X', 'Y', 'Zero']
-            _stg6_label = 'final: all parameters together'
+            # Preserve the staged constraints in the final pass. X and Zero
+            # are added only by their explicit controls below; displacement
+            # is the default and is never refined together with Zero.
+            _inst_params_stg6 = ['U', 'W', 'Y']
+            _stg6_label = (
+                'final: selected cell/HAP + bg + displacement + U + W + Y '
+                '(V/X/Zero/SH/L fixed)')
 
         # Swap Zero ↔ Displace for Stage 6 (same as Stage 2)
         if use_zero_not_displace_opt:
@@ -3558,7 +3824,12 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             _stg6_sample_params = [_displace_param]
 
         # Diagnostic: add X (Lorentzian strain) to the refine list.
-        if refine_x_opt and 'X' not in _inst_params_stg6:
+        if refine_x_opt and _any_hap_mustrain_requested:
+            print(
+                "  Stage 6: Free X ignored because per-phase Mustrain is "
+                "active; refining both would duplicate strain broadening.",
+                flush=True)
+        elif refine_x_opt and 'X' not in _inst_params_stg6:
             _inst_params_stg6 = list(_inst_params_stg6) + ['X']
             _stg6_label = _stg6_label + ' +X'
 
@@ -3746,22 +4017,9 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         #   '<phase_id>::Scale'  (e.g. '0::Scale', '1::Scale')
         # The covariance data lives in gpx.data['Covariance']['data'].
         scale_sigmas = {}   # phase_name → sigma(Scale)
+        cov_data = {}
         try:
-            # GSAS-II stores covariance data in multiple possible locations
-            # depending on version.  Try them in order of preference.
-            cov_data = {}
-            for cov_path in [
-                lambda: gpx.data.get('Covariance', {}).get('data', {}),
-                lambda: gpx.data.get('Covariance', {}),
-                lambda: gpx['Covariance']['data'] if 'Covariance' in gpx else {},
-            ]:
-                try:
-                    _cd = cov_path()
-                    if _cd and 'varyList' in _cd:
-                        cov_data = _cd
-                        break
-                except (KeyError, TypeError, AttributeError):
-                    continue
+            cov_data = _get_project_covariance_data(gpx)
 
             if not cov_data:
                 # Debug: log available top-level keys
@@ -3816,6 +4074,25 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                       "not found in vary list)", flush=True)
         except Exception as e:
             print(f"  Scale factor ESDs: extraction failed ({e})", flush=True)
+
+        _final_refinement_diagnostics = _covariance_diagnostics(cov_data)
+        _final_refinement_diagnostics['stages'] = _stage_diagnostics
+        _final_refinement_diagnostics['failed_stages'] = list(_failed_stages)
+        _last_refined_stage = next(
+            (item for item in reversed(_stage_diagnostics)
+             if not item.get('failed')
+             and int(item.get('requested_cycles') or 0) > 0),
+            None)
+        if _last_refined_stage:
+            _final_refinement_diagnostics['final_stage'] = dict(
+                _last_refined_stage)
+            for _key in (
+                    'converged', 'delta_chi2', 'max_shift_esd',
+                    'message', 'high_correlations'):
+                if (_final_refinement_diagnostics.get(_key) in
+                        (None, '', [])):
+                    _final_refinement_diagnostics[_key] = (
+                        _last_refined_stage.get(_key))
 
         if progress_callback:
             progress_callback('GSAS-II: extracting results...')
@@ -4173,14 +4450,22 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         # ── Extract GSAS-II RefList for physics-based profile generation ────
         # The RefList contains GSAS-II's refined Fc² values for each reflection,
         # giving more accurate phase envelopes than our generate_reflections output.
-        # RefList columns: 0=h, 1=k, 2=l, 3=mult, 4=dsp, 5=2theta, 6=Fo²,
-        #                  7=sig, 8=Fc², ...
-        gsas_refs = {}   # phase_name → [(two_theta, d, (h,k,l), mult*Fc²)]
+        # For a non-superstructure CW phase the RefList columns are:
+        # h,k,l,mult,d,pos,sig,gam,Fobs2,Fcalc2,phase,Icorr,Prfo.
+        gsas_refs = {}   # phase_name -> [(two_theta, d, (h,k,l), mult*Fc2)]
+        gsas_ref_profiles = {}
         try:
             raw_refl_lists = histogram.data.get('Reflection Lists', {})
             for ph_name, refl_data in raw_refl_lists.items():
                 ref_arr = refl_data.get('RefList')
                 if ref_arr is not None and len(ref_arr) > 0 and ref_arr.shape[1] > 8:
+                    _is_super = bool(refl_data.get('Super', False))
+                    _mult_idx = 4 if _is_super else 3
+                    _d_idx = 5 if _is_super else 4
+                    _pos_idx = 6 if _is_super else 5
+                    _sig_idx = 7 if _is_super else 6
+                    _gam_idx = 8 if _is_super else 7
+                    _fcalc_idx = 10 if _is_super else 9
                     # First pass: collect all reflections and track max Fc²
                     # (raw, without multiplicity) for threshold filtering.
                     # Using raw Fc² matches how generate_reflections() filters
@@ -4190,13 +4475,26 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                     max_fc2 = 0.0
                     for row in ref_arr:
                         h, k, l = int(row[0]), int(row[1]), int(row[2])
-                        mult      = float(row[3])
-                        d_sp      = float(row[4])
-                        two_theta = float(row[5])
-                        fc2       = float(row[8])   # Fc²
+                        mult = float(row[_mult_idx])
+                        d_sp = float(row[_d_idx])
+                        two_theta = float(row[_pos_idx])
+                        sig = float(row[_sig_idx])
+                        gam = float(row[_gam_idx])
+                        fc2 = float(row[_fcalc_idx])
                         weight    = mult * fc2
                         if weight > 0 and tt_min <= two_theta <= tt_max:
-                            raw_refs.append((two_theta, d_sp, (h, k, l), weight, fc2))
+                            sig_deg = math.sqrt(max(sig, 0.0001)) / 100.0
+                            gam_deg = gam / 100.0
+                            fwhm_deg = float(
+                                G2pwd.getgamFW(gam_deg, sig_deg))
+                            q = gam_deg / max(fwhm_deg, 1e-12)
+                            eta = max(0.0, min(
+                                1.0,
+                                1.36603 * q - 0.47719 * q**2
+                                + 0.11116 * q**3))
+                            raw_refs.append((
+                                two_theta, d_sp, (h, k, l), weight, fc2,
+                                fwhm_deg, eta))
                             if fc2 > max_fc2:
                                 max_fc2 = fc2
                     # Second pass: filter on raw Fc² (not mult*Fc²) to remove
@@ -4207,8 +4505,19 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                     rel_thresh = max_fc2 * 1e-4  # 0.01% of strongest Fc²
                     refs = [(r[0], r[1], r[2], r[3])
                             for r in raw_refs if r[4] >= max(1e-6, rel_thresh)]
+                    profiles = [{
+                        'two_theta': r[0],
+                        'd': r[1],
+                        'hkl': r[2],
+                        'weight': r[3],
+                        'fcalc2': r[4],
+                        'fwhm_deg': r[5],
+                        'eta': r[6],
+                    } for r in raw_refs
+                        if r[4] >= max(1e-6, rel_thresh)]
                     if refs:
                         gsas_refs[ph_name] = refs
+                        gsas_ref_profiles[ph_name] = profiles
                         print(f"  Loaded GSAS-II RefList for '{ph_name}': "
                               f"{len(refs)} reflections with Fc²", flush=True)
         except Exception as e:
@@ -4226,12 +4535,19 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             # If cell refinement failed and GSAS-II retained garbage values
             # (e.g. a=10⁸ Å from "Invalid cell metric tensor"), fall back
             # to the original input values from the phase dict.
-            _orig_a = float(ph.get('a', a))
-            _orig_b = float(ph.get('b', b))
-            _orig_c = float(ph.get('c', c))
-            _orig_alpha = float(ph.get('alpha', alpha))
-            _orig_beta  = float(ph.get('beta', beta))
-            _orig_gamma = float(ph.get('gamma', gamma))
+            _reference_model = (
+                prepared_gsas_models[i]
+                if i < len(prepared_gsas_models)
+                else _prepared_cif_reference('', ph))
+            _orig_a = float(_reference_model.get('a') or a)
+            _orig_b = float(_reference_model.get('b') or b)
+            _orig_c = float(_reference_model.get('c') or c)
+            _orig_alpha = float(
+                _reference_model.get('alpha') or alpha)
+            _orig_beta = float(
+                _reference_model.get('beta') or beta)
+            _orig_gamma = float(
+                _reference_model.get('gamma') or gamma)
 
             def _cell_diverged(ref, val, tol=2.0):
                 """True if val deviates from ref by more than tol× factor."""
@@ -4283,13 +4599,25 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
 
             # Profile / size info
             prof = _extract_profile_params(phase_obj)
+            _result_phase_opts = _phase_opts_for(
+                i, getattr(phase_obj, 'name', ''))
+            _size_was_requested = bool(
+                refine_size_opt or _result_phase_opts.get('refine_size'))
+            _mustrain_was_requested = bool(
+                _result_phase_opts.get('refine_mustrain'))
             cryst_A = prof.get('crystallite_size_A')
             cryst_source = 'gsas_hap_size' if cryst_A else None
+            microstrain = (
+                prof.get('microstrain_pct')
+                if _mustrain_was_requested else None)
+            microstrain_source = (
+                'gsas_hap_mustrain'
+                if microstrain is not None else None)
             # In verification_mode, Stage 4b (size refinement) was skipped,
             # so HAP Size is at GSAS-II's default (~1 µm).  Discard that
             # value and let the Y-based fallback below estimate size from
             # the refined Y parameter.
-            if verification_mode:
+            if verification_mode and not _size_was_requested:
                 cryst_A = None
                 cryst_source = None
 
@@ -4517,7 +4845,10 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                 'delta_volume_pct': (
                     round(_cell_delta['volume_pct'], 3)
                     if _cell_delta['volume_pct'] is not None else None),
-                'cell_reference': 'input_cif',
+                'cell_reference': 'prepared_gsas_cif',
+                'cell_reference_spacegroup': (
+                    _reference_model.get('spacegroup') or
+                    _reference_model.get('spacegroup_number')),
                 'system':            (ph.get('system') or 'triclinic').lower(),
                 'spacegroup_number': ph.get('spacegroup_number', 1),
                 'spacegroup':        ph.get('spacegroup', ''),
@@ -4560,6 +4891,10 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                 'crystallite_size_A':  round(cryst_A, 1) if cryst_A else None,
                 'crystallite_size_nm': round(cryst_A / 10, 2) if cryst_A else None,
                 'crystallite_size_source': cryst_source,
+                'microstrain_microstrain': (
+                    round(float(microstrain), 2)
+                    if microstrain is not None else None),
+                'microstrain_source': microstrain_source,
                 'weight_fraction_%':       round(wt_pct, 1),
                 'gsasii_mass_weight_fraction_%': round(wt_pct, 1),
                 'hill_howard_weight_fraction_%': round(wt_pct, 1),
@@ -5048,22 +5383,42 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                     continue
                 _tt_ref = float(_tt_for_fwhm[_pk_idx])
                 _pr = phase_results[_pi]
-                _U = float(_pr.get('U', 0.0) or 0.0)
-                _V = float(_pr.get('V', 0.0) or 0.0)
-                _W = float(_pr.get('W', 0.0) or 0.0)
-                _X = float(_pr.get('X', 0.0) or 0.0)
-                _Y = float(_pr.get('Y', 0.0) or 0.0)
-                _fwhm, _eta = tch_fwhm_eta(_tt_ref, _U, _V, _W, _X, _Y)
                 _pr['fwhm_reference_two_theta'] = round(_tt_ref, 4)
-                _pr['fwhm_reference_source'] = (
-                    'strongest_phase_pattern_peak')
-                _pr['fwhm_deg'] = round(_fwhm, 4)
-                _pr['eta_at_fwhm_reference'] = round(_eta, 3)
-                _refs = all_phase_refs[_pi] if _pi < len(all_phase_refs) else []
-                if _refs:
-                    _nearest = min(_refs, key=lambda r: abs(float(r[0]) - _tt_ref))
-                    if abs(float(_nearest[0]) - _tt_ref) <= 0.5:
-                        _pr['fwhm_reference_hkl'] = list(_nearest[2])
+                _phase_name = (
+                    gsas_phases[_pi].name
+                    if _pi < len(gsas_phases) else '')
+                _profiles = gsas_ref_profiles.get(_phase_name, [])
+                _nearest_profile = (
+                    min(
+                        _profiles,
+                        key=lambda r: abs(
+                            float(r['two_theta']) - _tt_ref))
+                    if _profiles else None)
+                if (_nearest_profile is not None
+                        and abs(float(_nearest_profile['two_theta'])
+                                - _tt_ref) <= 0.5):
+                    _pr['fwhm_reference_two_theta'] = round(
+                        float(_nearest_profile['two_theta']), 4)
+                    _pr['fwhm_reference_hkl'] = list(
+                        _nearest_profile['hkl'])
+                    _pr['fwhm_reference_source'] = (
+                        'gsas_reflection_profile')
+                    _pr['fwhm_deg'] = round(
+                        float(_nearest_profile['fwhm_deg']), 4)
+                    _pr['eta_at_fwhm_reference'] = round(
+                        float(_nearest_profile['eta']), 3)
+                else:
+                    _U = float(_pr.get('U', 0.0) or 0.0)
+                    _V = float(_pr.get('V', 0.0) or 0.0)
+                    _W = float(_pr.get('W', 0.0) or 0.0)
+                    _X = float(_pr.get('X', 0.0) or 0.0)
+                    _Y = float(_pr.get('Y', 0.0) or 0.0)
+                    _fwhm, _eta = tch_fwhm_eta(
+                        _tt_ref, _U, _V, _W, _X, _Y)
+                    _pr['fwhm_reference_source'] = (
+                        'global_profile_fallback')
+                    _pr['fwhm_deg'] = round(_fwhm, 4)
+                    _pr['eta_at_fwhm_reference'] = round(_eta, 3)
         except Exception as _e:
             print(f"  FWHM reference update from phase patterns failed: {_e}",
                   flush=True)
@@ -5152,7 +5507,43 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         # ── Post-refinement sanity warnings ─────────────────────────────
         # Flag suspicious results without failing the run.  Useful for
         # automated screening where a low Rwp is not always trustworthy.
-        _sanity_warnings = []
+        _sanity_warnings = list(_validation_warnings)
+
+        if _any_hap_broadening_requested and not _measured_instprm:
+            _sanity_warnings.append(
+                "Per-phase Size/Mustrain was refined without a measured "
+                ".instprm profile. These values can absorb instrument "
+                "broadening and should be treated as provisional.")
+        if _final_refinement_diagnostics.get('converged') is False:
+            _stage_name = (
+                (_final_refinement_diagnostics.get('final_stage') or {})
+                .get('stage', 'final refinement'))
+            _sanity_warnings.append(
+                f"GSAS-II did not converge in '{_stage_name}' before the "
+                f"cycle limit. Treat Rwp, cell values, and phase fractions "
+                f"as provisional; simplify the active parameters and rerun.")
+
+        _corrs = _final_refinement_diagnostics.get(
+            'high_correlations') or []
+        if _corrs:
+            _top_corr = _corrs[0]
+            _sanity_warnings.append(
+                "Strong parameter correlation detected: "
+                f"{_top_corr['parameter_1']} vs "
+                f"{_top_corr['parameter_2']} = "
+                f"{_top_corr['correlation_pct']:+.2f}%. "
+                "Values and uncertainties for correlated parameters may not "
+                "be independently interpretable; fix one parameter family "
+                "and compare against the baseline.")
+
+        _refine_message = str(
+            _final_refinement_diagnostics.get('message') or '')
+        if ('dropped' in _refine_message.lower()
+                or 'singular' in _refine_message.lower()):
+            _sanity_warnings.append(
+                "GSAS-II dropped or singularized one or more parameters. "
+                "The selected model is over-parameterized for this pattern; "
+                "do not interpret the affected values or uncertainties.")
 
         # Zero shift
         if _y_nonnegative_clamped:
@@ -5185,6 +5576,12 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         for _idx_opt, _popts_warn in enumerate(phase_options_list or []):
             if not isinstance(_popts_warn, dict):
                 continue
+            if _popts_warn.get('refine_cell'):
+                _sanity_warnings.append(
+                    f"Phase {_idx_opt + 1} cell refinement is active. This "
+                    f"moves tick positions and should be kept only when the "
+                    f"starting CIF identity is correct and peak shifts are "
+                    f"systematic for that phase.")
             if _popts_warn.get('refine_size'):
                 _sanity_warnings.append(
                     f"Phase {_idx_opt + 1} size refinement is active. It "
@@ -5220,7 +5617,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                 if _dv is not None and abs(float(_dv)) > 3.0:
                     _sanity_warnings.append(
                         f"Large {_axis_label} cell change for '{_name_warn}' "
-                        f"({_dv}% vs input CIF); check phase identity and "
+                        f"({_dv}% vs prepared GSAS CIF); check phase identity and "
                         f"sample displacement/zero correction.")
             _wf = pr.get('weight_fraction_%')
             _we = pr.get('weight_fraction_err_%')
@@ -5304,6 +5701,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             'pymatgen_used':  False,
             'method':         'GSAS-II',
             'warnings':       _sanity_warnings,
+            'refinement_diagnostics': _final_refinement_diagnostics,
             'instrument':     instrument,
             'instrument_label': profile['label'],
             'instrument_reason': instrument_reason,

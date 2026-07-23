@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "updated": "2026-07-23",
+  "policy": {
+    "normal_import": "Use fixtures whose intended_use includes normal_import and whose cell_setting is conventional or generated_conventional.",
+    "raw_regression": "Raw/P1/full-cell fixtures are allowed only as source/regression inputs. Do not treat them as canonical conventional CIFs.",
+    "mp_conventionalization": "MP structures may be returned in non-standard, primitive, or full-cell P1 settings. Convert cell and coordinates together; never patch only headers or cell axes."
+  },
+  "fixtures": {
+    "w2c_pbcn_mp_2034.cif": {
+      "formula": "W2C",
+      "source": "materials_project",
+      "mp_id": "mp-2034",
+      "spacegroup": "Pbcn",
+      "spacegroup_number": 60,
+      "cell_setting": "conventional_curated",
+      "intended_use": ["normal_import", "preview", "gsas_refinement"],
+      "notes": "Curated Pbcn CIF known to import into GSAS-II as SG 60 with asymmetric-unit sites."
+    },
+    "mo2c_pbcn_mp_1552_p1_fullcell.cif": {
+      "formula": "Mo2C",
+      "source": "materials_project",
+      "mp_id": "mp-1552",
+      "spacegroup": "Pbcn",
+      "spacegroup_number": 60,
+      "cell_setting": "raw_p1_full_cell",
+      "intended_use": ["raw_regression", "preview_source"],
+      "normal_import_safe": false,
+      "notes": "Raw MP structure dump: CIF declares P1 with all 12 atoms. Local pymatgen/spglib identifies Pbcn but crashes during conventional CIF generation in this environment; do not header-patch."
+    },
+    "mo2c_pbcn_mp_1552.cif": {
+      "formula": "Mo2C",
+      "source": "materials_project",
+      "mp_id": "mp-1552",
+      "spacegroup": "Pbcn",
+      "spacegroup_number": 60,
+      "cell_setting": "conventional_cifwriter",
+      "intended_use": ["normal_import", "preview", "gsas_refinement"],
+      "normal_import_safe": true,
+      "notes": "Validated conventional Pbcn CIF. GSAS-II imports two asymmetric sites in SG 60; cell and coordinates use the same CifWriter setting."
+    },
+    "moc_fm3m_mp_2746_primitive.cif": {
+      "formula": "MoC",
+      "source": "materials_project",
+      "mp_id": "mp-2746",
+      "spacegroup": "Fm-3m",
+      "spacegroup_number": 225,
+      "cell_setting": "primitive_f_cubic",
+      "intended_use": ["raw_regression"],
+      "normal_import_safe": false,
+      "notes": "Primitive F-cubic MP cell. Normal import should use a generated or converted conventional Fm-3m CIF."
+    },
+    "gamma_moc1x_fm3m.cif": {
+      "formula": "MoC1-x",
+      "source": "generated",
+      "mp_id": "mp-2746",
+      "spacegroup": "Fm-3m",
+      "spacegroup_number": 225,
+      "cell_setting": "generated_conventional",
+      "intended_use": ["generated_hypothesis", "preview", "gsas_refinement"],
+      "notes": "Generated cubic-carbide hypothesis CIF. Occupancy is fixed in the CIF; use the generator to create variants."
+    },
+    "gamma_wc1x_fm3m.cif": {
+      "formula": "WC1-x",
+      "source": "generated",
+      "mp_id": "mp-13136",
+      "spacegroup": "Fm-3m",
+      "spacegroup_number": 225,
+      "cell_setting": "generated_conventional",
+      "intended_use": ["generated_hypothesis", "preview", "gsas_refinement"],
+      "notes": "Generated cubic-carbide hypothesis CIF. Occupancy is fixed in the CIF; use the generator to create variants."
+    },
+    "mo_metal_bcc_im3m.cif": {
+      "formula": "Mo",
+      "source": "reference",
+      "mp_id": "mp-129",
+      "spacegroup": "Im-3m",
+      "spacegroup_number": 229,
+      "cell_setting": "reference_conventional",
+      "intended_use": ["normal_import", "preview", "gsas_refinement"],
+      "notes": "Room-temperature/reference conventional BCC Mo; not necessarily identical to current MP DFT primitive cell."
+    },
+    "wc_p-6m2_mp_1894.cif": {
+      "formula": "WC",
+      "source": "materials_project",
+      "mp_id": "mp-1894",
+      "spacegroup": "P-6m2",
+      "spacegroup_number": 187,
+      "cell_setting": "raw_p1_symmetry_metadata",
+      "intended_use": ["raw_regression", "preview_source"],
+      "normal_import_safe": false,
+      "notes": "CIF declares P1 even though MP metadata is P-6m2. Needs regenerated conventional/symmetry CIF before being called canonical."
+    },
+    "moc_p-6m2_mp_2305.cif": {
+      "formula": "MoC",
+      "source": "materials_project",
+      "mp_id": "mp-2305",
+      "spacegroup": "P-6m2",
+      "spacegroup_number": 187,
+      "cell_setting": "raw_p1_symmetry_metadata",
+      "intended_use": ["raw_regression", "preview_source"],
+      "normal_import_safe": false,
+      "notes": "CIF declares P1 even though MP metadata is P-6m2. Needs regenerated conventional/symmetry CIF before being called canonical."
+    },
+    "mo2c_p-3m1_mp_1221498.cif": {
+      "formula": "Mo2C",
+      "source": "materials_project",
+      "mp_id": "mp-1221498",
+      "spacegroup": "P-3m1",
+      "spacegroup_number": 164,
+      "cell_setting": "raw_p1_symmetry_metadata",
+      "intended_use": ["raw_regression", "preview_source"],
+      "normal_import_safe": false
+    },
+    "mo3c2_p-3m1_mp_1221473.cif": {
+      "formula": "Mo3C2",
+      "source": "materials_project",
+      "mp_id": "mp-1221473",
+      "spacegroup": "P-3m1",
+      "spacegroup_number": 164,
+      "cell_setting": "raw_p1_symmetry_metadata",
+      "intended_use": ["raw_regression", "preview_source"],
+      "normal_import_safe": false
+    },
+    "w2c_p-3m1_mp_1008625.cif": {
+      "formula": "W2C",
+      "source": "materials_project",
+      "mp_id": "mp-1008625",
+      "spacegroup": "P-3m1",
+      "spacegroup_number": 164,
+      "cell_setting": "raw_p1_symmetry_metadata",
+      "intended_use": ["raw_regression", "preview_source"],
+      "normal_import_safe": false
+    },
+    "w2c_pnnm_mp_33065.cif": {
+      "formula": "W2C",
+      "source": "materials_project",
+      "mp_id": "mp-33065",
+      "spacegroup": "Pnnm",
+      "spacegroup_number": 58,
+      "cell_setting": "raw_p1_symmetry_metadata",
+      "intended_use": ["raw_regression", "preview_source"],
+      "normal_import_safe": false
+    },
+    "w2c_p-31m_mp_567397.cif": {
+      "formula": "W2C",
+      "source": "materials_project",
+      "mp_id": "mp-567397",
+      "spacegroup": "P-31m",
+      "spacegroup_number": 162,
+      "cell_setting": "raw_source",
+      "intended_use": ["preview_source", "needs_audit"]
+    },
+    "w9c4_r32_mp_684989.cif": {
+      "formula": "W9C4",
+      "source": "materials_project",
+      "mp_id": "mp-684989",
+      "spacegroup": "R32",
+      "spacegroup_number": 155,
+      "cell_setting": "hexagonal_axes_curated",
+      "intended_use": ["preview_source", "needs_gsas_validation"],
+      "notes": "MP raw structure is rhombohedral-like; this file uses hexagonal axes. Validate before normal import."
+    }
+  }
+}

@@ -74,14 +74,69 @@ _FIXTURE_DIR = os.path.join(
 _LOCAL_FIXTURES = {
     'mp-2034': 'w2c_pbcn_mp_2034.cif',   # W2C Pbcn — see CIF-Audit_v1.md
     'mp-129': 'mo_metal_bcc_im3m.cif',   # Mo bcc Im-3m — use RT conventional cell
+    'mp-1894': 'wc_p-6m2_mp_1894.cif',
+    'mp-33065': 'w2c_pnnm_mp_33065.cif',
+    'mp-684989': 'w9c4_r32_mp_684989.cif',
+    'mp-567397': 'w2c_p-31m_mp_567397.cif',
+    'mp-1008625': 'w2c_p-3m1_mp_1008625.cif',
+    'mp-13136': 'gamma_wc1x_fm3m.cif',
+    'mp-1552': 'mo2c_pbcn_mp_1552.cif',
+    'mp-2305': 'moc_p-6m2_mp_2305.cif',
+    'mp-1221498': 'mo2c_p-3m1_mp_1221498.cif',
+    'mp-1221473': 'mo3c2_p-3m1_mp_1221473.cif',
+    'mp-2746': 'gamma_moc1x_fm3m.cif',
+}
+
+_LOCAL_FIXTURE_METADATA = {
+    'mp-2034': {'formula': 'W2C', 'spacegroup': 'Pbcn',
+                'spacegroup_number': 60, 'system': 'orthorhombic', 'Z': 4},
+    'mp-129': {'formula': 'Mo', 'spacegroup': 'Im-3m',
+               'spacegroup_number': 229, 'system': 'cubic', 'Z': 2},
+    'mp-1894': {'formula': 'WC', 'spacegroup': 'P-6m2',
+                'spacegroup_number': 187, 'system': 'hexagonal', 'Z': 1},
+    'mp-33065': {'formula': 'W2C', 'spacegroup': 'Pnnm',
+                 'spacegroup_number': 58, 'system': 'orthorhombic', 'Z': 2},
+    'mp-684989': {'formula': 'W9C4', 'spacegroup': 'R32',
+                  'spacegroup_number': 155, 'system': 'trigonal', 'Z': 6},
+    'mp-567397': {'formula': 'W2C', 'spacegroup': 'P-31m',
+                  'spacegroup_number': 162, 'system': 'trigonal', 'Z': 3},
+    'mp-1008625': {'formula': 'W2C', 'spacegroup': 'P-3m1',
+                   'spacegroup_number': 164, 'system': 'trigonal', 'Z': 1},
+    'mp-13136': {'formula': 'WC1-x', 'spacegroup': 'Fm-3m',
+                 'spacegroup_number': 225, 'system': 'cubic', 'Z': 4,
+                 'gamma_wc1x': True},
+    'mp-1552': {'formula': 'Mo2C', 'spacegroup': 'Pbcn',
+                'spacegroup_number': 60, 'system': 'orthorhombic', 'Z': 4},
+    'mp-2305': {'formula': 'MoC', 'spacegroup': 'P-6m2',
+                'spacegroup_number': 187, 'system': 'hexagonal', 'Z': 1},
+    'mp-1221498': {'formula': 'Mo2C', 'spacegroup': 'P-3m1',
+                   'spacegroup_number': 164, 'system': 'trigonal', 'Z': 1},
+    'mp-1221473': {'formula': 'Mo3C2', 'spacegroup': 'P-3m1',
+                   'spacegroup_number': 164, 'system': 'trigonal', 'Z': 1},
+    'mp-2746': {'formula': 'MoC1-x', 'spacegroup': 'Fm-3m',
+                'spacegroup_number': 225, 'system': 'cubic', 'Z': 4,
+                'gamma_wc1x': True},
 }
 
 
-def _fixture_cif_for(mp_id):
-    """Return canonical fixture CIF text for an mp_id, or None if no override."""
+def _fixture_cif_for(mp_id, purpose=None):
+    """Return fixture CIF text, optionally enforcing its declared role.
+
+    ``purpose='normal_import'`` permits only audited fixtures whose manifest
+    includes ``normal_import`` and does not mark ``normal_import_safe`` false.
+    Raw/P1 fixtures remain accessible to audit and regression callers that do
+    not request a production purpose.
+    """
+    mp_id = str(mp_id)
     fname = _LOCAL_FIXTURES.get(mp_id)
     if not fname:
         return None
+    if purpose == 'normal_import':
+        record = _fixture_record_for(mp_id)
+        intended = set(record.get('intended_use') or [])
+        if ('normal_import' not in intended
+                or record.get('normal_import_safe', True) is False):
+            return None
     path = os.path.join(_FIXTURE_DIR, fname)
     if not os.path.isfile(path):
         return None
@@ -90,6 +145,51 @@ def _fixture_cif_for(mp_id):
             return f.read()
     except Exception:
         return None
+
+
+def _fixture_metadata_for(mp_id):
+    """Return curated metadata for a local fixture, if any."""
+    return dict(_LOCAL_FIXTURE_METADATA.get(str(mp_id), {}))
+
+
+def _fixture_manifest():
+    """Load fixture provenance/role metadata, if present."""
+    path = os.path.join(_FIXTURE_DIR, 'fixture_manifest.json')
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f).get('fixtures', {})
+    except Exception:
+        return {}
+
+
+def _fixture_record_for(mp_id):
+    """Return manifest record for the fixture mapped to an mp-id."""
+    fname = _LOCAL_FIXTURES.get(str(mp_id))
+    if not fname:
+        return {}
+    return dict(_fixture_manifest().get(fname, {}))
+
+
+def _apply_fixture_record(result, mp_id):
+    """Attach fixture role metadata and warnings to a phase dict."""
+    rec = _fixture_record_for(mp_id)
+    if not rec:
+        return result
+    result['fixture_cell_setting'] = rec.get('cell_setting')
+    result['fixture_intended_use'] = rec.get('intended_use') or []
+    result['fixture_normal_import_safe'] = rec.get('normal_import_safe', True)
+    if ('normal_import' in result['fixture_intended_use']
+            and result['fixture_normal_import_safe']):
+        result['cif_preparation_policy'] = 'audited_normal_fixture'
+    if rec.get('notes'):
+        result['fixture_notes'] = rec.get('notes')
+    if rec.get('normal_import_safe') is False:
+        result['fixture_warning'] = (
+            'This local fixture is a raw/source CIF, not a validated '
+            'canonical conventional CIF. Preview may be useful, but GSAS-II '
+            'refinement should be checked carefully.'
+        )
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -280,20 +380,45 @@ def _parse(entries):
                 "source":            "mp",
             })
 
-            fixture_text = _fixture_cif_for(mp_id)
+            fixture_text = _fixture_cif_for(
+                mp_id, purpose='normal_import')
             if fixture_text:
                 fixture = parse_cif(fixture_text)
-                for key in ('formula', 'a', 'b', 'c', 'alpha', 'beta',
-                            'gamma', 'spacegroup_number', 'system', 'Z'):
-                    if fixture.get(key) not in (None, ''):
-                        result[key] = fixture[key]
-                result['spacegroup'] = (
-                    fixture.get('spacegroup')
-                    or fixture.get('spacegroup_name')
-                    or result.get('spacegroup')
-                )
-                result['name'] = fixture.get('formula') or result.get('name')
+                fixture_meta = _fixture_metadata_for(mp_id)
+                fixture_sg = int(fixture.get('spacegroup_number') or 1)
+                if fixture_sg > 1:
+                    for key in ('formula', 'a', 'b', 'c', 'alpha', 'beta',
+                                'gamma', 'spacegroup_number', 'system', 'Z'):
+                        if fixture.get(key) not in (None, ''):
+                            result[key] = fixture[key]
+                    result['spacegroup'] = (
+                        fixture.get('spacegroup')
+                        or fixture.get('spacegroup_name')
+                        or result.get('spacegroup')
+                    )
+                    result['name'] = fixture.get('formula') or result.get('name')
+                for key, value in fixture_meta.items():
+                    if value not in (None, ''):
+                        result[key] = value
+                result = conventionalize_phase_cell(result)
+                if fixture_meta.get('gamma_wc1x'):
+                    result['name'] = fixture_meta.get('formula') or result.get('name')
                 result['_cif_text'] = fixture_text
+                result = _apply_fixture_record(result, mp_id)
+
+                try:
+                    for el, x, y, z, occ in fixture.get('sites') or []:
+                        if (str(el).upper() == 'C'
+                                and abs(float(x) % 1.0 - 0.5) < 1e-4
+                                and abs(float(y) % 1.0 - 0.5) < 1e-4
+                                and abs(float(z) % 1.0 - 0.5) < 1e-4):
+                            result['gamma_c_occupancy'] = float(occ)
+                            result['gamma_vacancy_x'] = max(
+                                0.0, min(1.0, 1.0 - float(occ)))
+                            result['gamma_wc1x'] = True
+                            break
+                except Exception:
+                    pass
 
             results.append(result)
         except Exception:
@@ -330,13 +455,16 @@ def fetch_cif(mp_id, api_key):
     The new API has no dedicated /cif endpoint — we request 'structure'
     from the summary endpoint then convert via pymatgen.
     """
-    fixture_text = _fixture_cif_for(mp_id)
+    fixture_text = _fixture_cif_for(mp_id, purpose='normal_import')
     if fixture_text:
         print(f"  fetch_cif: using local fixture for {mp_id} "
               f"(no MP API call needed)", flush=True)
         parsed = parse_cif(fixture_text)
+        parsed.update(_fixture_metadata_for(mp_id))
+        parsed = conventionalize_phase_cell(parsed)
         parsed.update({"mp_id": mp_id, "cod_id": mp_id,
                        "cif_text": fixture_text, "source": "mp"})
+        parsed = _apply_fixture_record(parsed, mp_id)
         return parsed
 
     if not api_key:
@@ -377,8 +505,14 @@ def fetch_cif(mp_id, api_key):
     cif_text = _structure_dict_to_cif(struct, mp_id, formula, sym)
 
     parsed = parse_cif(cif_text)
+    _source_cif_sg = int(parsed.get('spacegroup_number') or 1)
     parsed.update({"mp_id": mp_id, "cod_id": mp_id,
                    "formula": formula, "cif_text": cif_text, "source": "mp"})
+    parsed['source_cif_spacegroup_number'] = _source_cif_sg
+    parsed['cif_preparation_policy'] = (
+        'mp_conventional_cif'
+        if _source_cif_sg > 1
+        else 'mp_p1_full_cell_fallback')
 
     # Merge MP symmetry data — pymatgen writes P1 CIFs from Structure dicts
     # (no symmetry info), so parse_cif returns spacegroup_number=1.  The MP
@@ -414,16 +548,31 @@ def _structure_dict_to_cif(struct_dict, mp_id, formula, sym):
     # contains the correct space group (not P1).
     try:
         from pymatgen.core import Structure
-        from pymatgen.io.cif import CifWriter, CifParser
+        from pymatgen.io.cif import CifWriter
+        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
         struct = Structure.from_dict(struct_dict)
         sg_num = sym.get("number", 1)
-        full_cell_n = len(struct)  # total atoms in the structure
+        full_cell_n = len(struct)
+        conventional_struct = None
 
         # Try multiple symprec values — tight first (preserves distinct
         # Wyckoff sites in compact cells like W2C), then looser.
         for symprec in (0.01, 0.05, 0.1, 0.2):
             try:
-                writer = CifWriter(struct, symprec=symprec)
+                analyzer = SpacegroupAnalyzer(struct, symprec=symprec)
+                detected_sg = int(analyzer.get_space_group_number() or 1)
+                if sg_num > 1 and detected_sg != int(sg_num):
+                    print(
+                        f"  MP CIF ({mp_id}): symmetry analyzer detected "
+                        f"SG {detected_sg}, MP declares {sg_num} at "
+                        f"symprec={symprec}; trying another tolerance.",
+                        flush=True)
+                    continue
+                conventional_struct = (
+                    analyzer.get_conventional_standard_structure())
+                candidate_n = len(conventional_struct)
+                writer = CifWriter(
+                    conventional_struct, symprec=symprec)
                 import tempfile, os
                 with tempfile.NamedTemporaryFile(
                         suffix=".cif", delete=False, mode="w") as f:
@@ -440,7 +589,7 @@ def _structure_dict_to_cif(struct_dict, mp_id, formula, sym):
                 written_sites = written_parsed.get('sites') or []
 
                 # Check if CifWriter actually reduced the structure
-                if written_sg > 1 and len(written_sites) < full_cell_n:
+                if written_sg > 1 and len(written_sites) < candidate_n:
                     # CifWriter succeeded in finding symmetry and reducing.
                     # Check if the detected SG matches what MP declares.
                     if written_sg == sg_num:
@@ -459,7 +608,7 @@ def _structure_dict_to_cif(struct_dict, mp_id, formula, sym):
                               f"at symprec={symprec} — DISCARDING to avoid "
                               f"SG mismatch", flush=True)
                         continue
-                elif written_sg <= 1 or len(written_sites) >= full_cell_n:
+                elif written_sg <= 1 or len(written_sites) >= candidate_n:
                     # CifWriter fell back to P1 (no symmetry detected) or
                     # didn't reduce the sites.  DO NOT patch in the real SG
                     # — that would cause GSAS-II to double-expand.
@@ -473,7 +622,11 @@ def _structure_dict_to_cif(struct_dict, mp_id, formula, sym):
         # GSAS-II's _build_conventional_cif will detect the P1 + full cell
         # and handle it appropriately.
         try:
-            writer = CifWriter(struct)
+            fallback_struct = (
+                conventional_struct
+                if conventional_struct is not None else struct)
+            writer = CifWriter(fallback_struct)
+            full_cell_n = len(fallback_struct)
             import tempfile, os
             with tempfile.NamedTemporaryFile(
                     suffix=".cif", delete=False, mode="w") as f:

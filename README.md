@@ -33,32 +33,64 @@ The first launch creates a local Python environment and installs dependencies. G
 - XRD file upload with live preview (`.dat`, `.xy`, `.xye`, `.csv`, `.txt`, `.xlsx`)
 - Materials Project phase search
 - Manual CIF upload
-- CIF caching and validation
+- Versioned CIF caching and pre-refinement validation
 - Correct preview tick generation from imported phases
+- Conventional-setting Materials Project import with cell/coordinates kept together
 - GSAS-II refinement backend
 - `.instprm` instrument parameter support
 - Built-in WC/W2C Synergy-S production preset
 - Saved user presets
 - Per-phase controls for:
+  - unit-cell refinement
   - crystallite size
   - microstrain
   - March-Dollase preferred orientation
-  - diagnostic uniform-cell handling for W2C-like phases
-- Fit warnings and baseline comparison
-- Outputs for phase fraction, uncertainty notes, FWHM reference peak, crystallite size, preferred-orientation value, and cell-change percentages
+- Fit convergence/correlation warnings and baseline comparison
+- Outputs for phase fraction, uncertainty notes, exact GSAS profile FWHM,
+  crystallite size, microstrain, preferred-orientation value, and cell-change
+  percentages relative to the exact prepared GSAS CIF
 
 ## Recommended Workflow
 
 1. Upload the measured XRD pattern.
 2. Set wavelength and 2-theta range.
 3. Search Materials Project or upload CIFs for the expected phases.
-4. Run a constrained baseline fit.
-5. Mark/save the baseline in the GUI.
-6. Add one refinement freedom at a time.
-7. Compare the new fit against the baseline.
-8. Save a validated preset for related samples.
+4. Confirm the phase card reports `CIF ok`, the intended space group,
+   conventional cell, asymmetric-site count, and plausible preview ticks.
+5. Run a constrained baseline fit with phase Cell, Size, Mustrain, PO, Uiso,
+   and atom positions fixed.
+6. Mark/save the baseline in the GUI.
+7. Add one refinement freedom at a time. Refine cell before sample
+   broadening, and use a measured `.instprm` whenever size or strain matters.
+8. Keep a freedom only when the refinement converges, the residual improves
+   in the expected peaks, and the parameter remains physically plausible.
+9. Save a validated preset for related samples.
 
 Do not keep extra fit freedoms just because Rwp improves. Preferred orientation, Uiso, size, microstrain, and atom-position refinement can all improve the statistic while also changing phase fractions or absorbing model error.
+
+The toolkit rejects a Materials Project phase before refinement if GSAS-II
+imports a different space group, cell setting, or asymmetric-site model than
+the prepared CIF. Raw P1/full-cell fixtures are retained only as regression
+inputs and cannot silently replace normal-import CIFs. Cached MP structures use
+versioned normal-import keys so older transformed CIFs cannot poison a run.
+
+## Mo2C M1 Acceptance Recipe
+
+For the included `mp-1552` orthorhombic Mo2C model and a calibrated SmartLab
+instrument profile:
+
+1. Fit `20-60` degrees 2-theta with Cu K-alpha (`1.54056` A).
+2. Add `mp-1552` and verify Pbcn (No. 60), two asymmetric sites, and cell near
+   `a=4.7285`, `b=6.0526`, `c=5.2098` A.
+3. Run the constrained baseline with all phase-card freedoms off.
+4. Enable Cell for Mo2C and the global `Refine cell too` gate; rerun.
+5. Enable Size for Mo2C and rerun with Mustrain still off.
+
+The current acceptance data reaches about `Rwp=5.93%`, a phase-profile FWHM of
+`0.445 degrees` for the (121) reference near `39.58 degrees`, and a GSAS HAP
+size near `22.4 nm`. Enabling Mustrain changes Rwp by only about `0.01%` and
+produces approximately `99%` size/strain correlation, so strain should be
+rejected for this example.
 
 ## Terminal Batch Workflow
 

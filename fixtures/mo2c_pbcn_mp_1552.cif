@@ -1,0 +1,49 @@
+# Canonical conventional Mo2C (Pbcn, mp-1552) CIF.
+#
+# Provenance:
+#   Source structure: Materials Project mp-1552
+#   Preparation: pymatgen CifWriter with symprec=0.01
+#   Setting: conventional Pbcn, with cell and coordinates transformed together
+#
+# GSAS-II validation:
+#   Space group: P b c n (No. 60)
+#   Asymmetric sites: 2 (Mo and C)
+#   Conventional-cell contents: Mo8 C4, Z=4
+#
+# The raw P1/full-cell source remains in
+# mo2c_pbcn_mp_1552_p1_fullcell.cif for regression testing only.
+
+data_Mo2C
+_symmetry_space_group_name_H-M   Pbcn
+_cell_length_a   4.72854310
+_cell_length_b   6.05260249
+_cell_length_c   5.20975702
+_cell_angle_alpha   90.00000000
+_cell_angle_beta   90.00000000
+_cell_angle_gamma   90.00000000
+_symmetry_Int_Tables_number   60
+_chemical_formula_structural   Mo2C
+_chemical_formula_sum   'Mo8 C4'
+_cell_volume   149.10320289
+_cell_formula_units_Z   4
+loop_
+ _symmetry_equiv_pos_site_id
+ _symmetry_equiv_pos_as_xyz
+  1  'x, y, z'
+  2  '-x, -y, -z'
+  3  '-x+1/2, -y+1/2, z+1/2'
+  4  'x+1/2, y+1/2, -z+1/2'
+  5  'x+1/2, -y+1/2, -z'
+  6  '-x+1/2, y+1/2, z'
+  7  '-x, y, -z+1/2'
+  8  'x, -y, z+1/2'
+loop_
+ _atom_site_type_symbol
+ _atom_site_label
+ _atom_site_symmetry_multiplicity
+ _atom_site_fract_x
+ _atom_site_fract_y
+ _atom_site_fract_z
+ _atom_site_occupancy
+  Mo  Mo0  8  0.24554849  0.12202364  0.57950887  1
+  C   C1   4  0.00000000  0.37748070  0.75000000  1
