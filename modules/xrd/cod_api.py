@@ -377,7 +377,12 @@ def get_stick_pattern(structure, wavelength, tt_min=5.0, tt_max=90.0):
 
     Otherwise falls back to multiplicity-only weights.
     """
-    from .crystallography import generate_reflections, parse_cif, expand_sites_from_cif
+    from .crystallography import (
+        expand_sites_from_cif,
+        filter_reflections_by_relative_intensity,
+        generate_reflections,
+        parse_cif,
+    )
     a  = structure.get('a') or 4.0
     b  = structure.get('b') or a
     c  = structure.get('c') or a
@@ -562,7 +567,7 @@ def get_stick_pattern(structure, wavelength, tt_min=5.0, tt_max=90.0):
 
     try:
         refs = generate_reflections(a, b, c, al, be, ga, sys_, sg,
-                                     wavelength, tt_min, tt_max, hkl_max=8,
+                                     wavelength, tt_min, tt_max, hkl_max=12,
                                      sites=sites or None,
                                      site_policy=_sp)
     except Exception:
@@ -571,12 +576,13 @@ def get_stick_pattern(structure, wavelength, tt_min=5.0, tt_max=90.0):
     if not refs:
         return []
 
+    refs = filter_reflections_by_relative_intensity(refs)
     max_w = max((r[3] for r in refs), default=1)
     return [{'two_theta': round(r[0], 3),
              'd':         round(r[1], 4),
              'hkl':       f'({r[2][0]}{r[2][1]}{r[2][2]})',
              'rel_int':   round(r[3] / max_w, 3)}
-            for r in refs if r[3] / max_w >= 0.01]  # drop sticks < 1% rel intensity
+            for r in refs]
 
 
 def get_preview_reflections(phase, wavelength, tt_min=5.0, tt_max=90.0):

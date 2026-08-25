@@ -466,6 +466,8 @@ CROMER_MANN = {
     'B':  (2.05450,23.2185, 1.33260,1.02100, 1.09790,60.3498, 0.706800,0.140300,-0.19320),
 }
 
+_PYMATGEN_SCATTERING_PARAMS = None
+
 
 def atomic_scattering_factor(element, s):
     """
@@ -475,9 +477,29 @@ def atomic_scattering_factor(element, s):
     el = element.strip().capitalize()
     params = CROMER_MANN.get(el)
     if params is None:
-        # Rough fallback: use number of electrons / 4
-        # (very rough but better than nothing)
-        return 10.0
+        # Use pymatgen's broad International-Tables parameter set for
+        # elements not present in the small fast-path table above.  The old
+        # constant fallback (f=10 for every missing element) made rare-earth
+        # oxides physically wrong: Ce and O scattered at nearly the same
+        # strength, altering both relative intensities and tick filtering.
+        global _PYMATGEN_SCATTERING_PARAMS
+        try:
+            if _PYMATGEN_SCATTERING_PARAMS is None:
+                from pymatgen.analysis.diffraction.xrd import (
+                    ATOMIC_SCATTERING_PARAMS)
+                _PYMATGEN_SCATTERING_PARAMS = ATOMIC_SCATTERING_PARAMS
+            coefficients = _PYMATGEN_SCATTERING_PARAMS[el]
+            from pymatgen.core.periodic_table import Element
+            atomic_number = float(Element(el).Z)
+            s2 = s * s
+            return atomic_number - 41.78214 * s2 * sum(
+                a * math.exp(-b * s2) for a, b in coefficients)
+        except Exception:
+            try:
+                from pymatgen.core.periodic_table import Element
+                return float(Element(el).Z)
+            except Exception:
+                return 10.0
     a1,b1, a2,b2, a3,b3, a4,b4, c = params
     s2 = s * s
     return (c + a1*math.exp(-b1*s2) + a2*math.exp(-b2*s2)
@@ -643,6 +665,8 @@ def generate_reflections(a, b, c, al, be, ga, system, spacegroup_number,
       'auto' (default) — expand asymmetric unit by symmetry before F²
       'legacy_direct_sites' — use sites directly, while still applying the
           SG absence filter
+      'expanded_full_cell_sites' — use already-expanded sites directly while
+          retaining the declared space-group absence filter
       'direct_full_cell_sites' — use sites directly and let their structure
           factors encode extinctions without SG pre-filtering
       'structure_expanded' — always expand (same as auto)
@@ -674,6 +698,7 @@ def generate_reflections(a, b, c, al, be, ga, system, spacegroup_number,
     use_direct_sites = (
         sites is not None
         and site_policy in ('legacy_direct_sites',
+                            'expanded_full_cell_sites',
                             'direct_full_cell_sites',
                             'source_full_cell')
     )
@@ -699,7 +724,8 @@ def generate_reflections(a, b, c, al, be, ga, system, spacegroup_number,
     _DEFAULT_B_ISO = 0.5
     _b_iso_map = {'_all': _DEFAULT_B_ISO}
 
-    seen_d = {}   # d_key → [two_theta, d, (h,k,l), count, weight]
+    # d_key → [two_theta, d, (h,k,l), multiplicity, F2*LP, raw_F2]
+    seen_d = {}
 
     for h in range(-hkl_max, hkl_max + 1):
         for k in range(-hkl_max, hkl_max + 1):
@@ -731,10 +757,12 @@ def generate_reflections(a, b, c, al, be, ga, system, spacegroup_number,
                     # so the theoretical stick intensities match a measured
                     # powder pattern visually.
                     F2_LP = None
+                    F2_raw = None
                     if f2_sites is not None:
                         s = sin_theta / wavelength
                         F2 = structure_factor_sq_dw(h, k, l, f2_sites, s,
                                                      _b_iso_map)
+                        F2_raw = F2
                         # Lorentz-polarisation factor
                         theta_r = math.radians(two_theta / 2)
                         cos2t = math.cos(math.radians(two_theta))
@@ -743,26 +771,31 @@ def generate_reflections(a, b, c, al, be, ga, system, spacegroup_number,
                         LP = ((1 + cos2t**2) / (sin_t**2 * cos_t)
                               if sin_t > 0 and cos_t > 0 else 1.0)
                         F2_LP = F2 * LP
-                    seen_d[d_key] = [two_theta, d, _display_hkl(h, k, l, system),
-                                     1, F2_LP]
+                    seen_d[d_key] = [two_theta, d,
+                                     _display_hkl(h, k, l, system),
+                                     1, F2_LP, F2_raw]
 
     # Build final list with intensity weights.
     entries = sorted(seen_d.values(), key=lambda x: x[0])
 
-    max_w = 0.0
+    max_f2 = 0.0
     if f2_sites is not None:
         for entry in entries:
-            w = entry[4]
-            if w is not None and w > max_w:
-                max_w = w
-    rel_threshold = max_w * 1e-2  # 1% of strongest reflection
+            raw_f2 = entry[5]
+            if raw_f2 is not None and raw_f2 > max_f2:
+                max_f2 = raw_f2
+    # Filter on the structure factor itself, not F2*Lorentz-polarization.
+    # LP strongly boosts low-angle peaks and used to hide legitimate oxide
+    # reflections such as fluorite CeO2 (222).  Match the permissive threshold
+    # used for GSAS-II RefList display ticks: 0.01% of strongest raw F2.
+    rel_threshold = max_f2 * 1e-4
 
     reflections = []
     for entry in entries:
-        two_theta, d, hkl, mult, F2_LP = entry
+        two_theta, d, hkl, mult, F2_LP, F2_raw = entry
         if f2_sites is not None and F2_LP is not None:
             # Skip reflections with negligible intensity
-            if F2_LP < max(1e-4, rel_threshold):
+            if F2_raw is None or F2_raw < max(1e-6, rel_threshold):
                 continue
             weight = mult * F2_LP
         else:
@@ -771,6 +804,25 @@ def generate_reflections(a, b, c, al, be, ga, system, spacegroup_number,
         reflections.append([two_theta, d, hkl, weight])
 
     return reflections  # [(two_theta, d, (h,k,l), intensity_weight), ...]
+
+
+def filter_reflections_by_relative_intensity(reflections,
+                                             minimum_fraction=0.01):
+    """Return the common display-tick subset of a reflection list.
+
+    Reflection generation retains very weak but physically valid peaks for
+    profile calculations.  Preview and fitted tick rows use this shared 1%
+    integrated-intensity cutoff so they remain readable and, critically, show
+    the same families.  The cutoff is applied after multiplicity, structure
+    factor, Debye-Waller, and Lorentz-polarization weighting.
+    """
+    refs = list(reflections or [])
+    maximum = max((float(reflection[3]) for reflection in refs), default=0.0)
+    if maximum <= 0:
+        return []
+    cutoff = maximum * max(0.0, float(minimum_fraction))
+    return [reflection for reflection in refs
+            if float(reflection[3]) >= cutoff]
 
 
 def generate_reflections_rietveld(a, b, c, al, be, ga, system, spacegroup_number,
@@ -783,7 +835,8 @@ def generate_reflections_rietveld(a, b, c, al, be, ga, system, spacegroup_number
     that allow recomputing intensities when B_iso changes without
     re-enumerating all hkl:
 
-    site_policy: 'auto', 'legacy_direct_sites', or 'structure_expanded'
+    site_policy: 'auto', 'legacy_direct_sites',
+        'expanded_full_cell_sites', or 'structure_expanded'
         (see generate_reflections docstring).
 
     Returns list of dicts:
@@ -796,7 +849,10 @@ def generate_reflections_rietveld(a, b, c, al, be, ga, system, spacegroup_number
     # Expand asymmetric-unit sites to full unit cell for correct F²
     full_sites = sites
     if sites and spacegroup_number > 1:
-        if site_policy == 'legacy_direct_sites':
+        if site_policy in ('legacy_direct_sites',
+                           'expanded_full_cell_sites',
+                           'direct_full_cell_sites',
+                           'source_full_cell'):
             full_sites = sites
         else:
             expanded = _expand_sites_by_symmetry(
@@ -1352,6 +1408,7 @@ def parse_cif(cif_text):
         'alpha': 90.0, 'beta': 90.0, 'gamma': 90.0,
         'spacegroup_number': 1,
         'spacegroup_name': 'P 1',
+        'spacegroup': 'P 1',
         'system': 'triclinic',
         'formula': '',
         'cod_id': '',
@@ -1370,41 +1427,42 @@ def parse_cif(cif_text):
     # ── Pass 1: scalar CIF tags ──────────────────────────────────────────
     for line in lines:
         line = line.strip()
-        if line.startswith('_cell_length_a'):
+        lower = line.lower()
+        if lower.startswith('_cell_length_a'):
             v = parse_val(line.split()[-1])
             if v: result['a'] = v
-        elif line.startswith('_cell_length_b'):
+        elif lower.startswith('_cell_length_b'):
             v = parse_val(line.split()[-1])
             if v: result['b'] = v
-        elif line.startswith('_cell_length_c'):
+        elif lower.startswith('_cell_length_c'):
             v = parse_val(line.split()[-1])
             if v: result['c'] = v
-        elif line.startswith('_cell_angle_alpha'):
+        elif lower.startswith('_cell_angle_alpha'):
             v = parse_val(line.split()[-1])
             if v: result['alpha'] = v
-        elif line.startswith('_cell_angle_beta'):
+        elif lower.startswith('_cell_angle_beta'):
             v = parse_val(line.split()[-1])
             if v: result['beta'] = v
-        elif line.startswith('_cell_angle_gamma'):
+        elif lower.startswith('_cell_angle_gamma'):
             v = parse_val(line.split()[-1])
             if v: result['gamma'] = v
-        elif (line.startswith('_symmetry_Int_Tables_number') or
-              line.startswith('_space_group_IT_number') or
-              line.startswith('_space_group.IT_number')):
+        elif (lower.startswith('_symmetry_int_tables_number') or
+              lower.startswith('_space_group_it_number') or
+              lower.startswith('_space_group.it_number')):
             v = parse_val(line.split()[-1])
             if v: result['spacegroup_number'] = int(v)
-        elif (line.startswith('_symmetry_space_group_name_H-M') or
-              line.startswith('_space_group_name_H-M_alt') or
-              line.startswith('_space_group.name_H-M') or
-              line.startswith('_space_group_name_H-M ')):
+        elif (lower.startswith('_symmetry_space_group_name_h-m') or
+              lower.startswith('_space_group_name_h-m_alt') or
+              lower.startswith('_space_group.name_h-m') or
+              lower.startswith('_space_group_name_h-m ')):
             parts = line.split(None, 1)
             if len(parts) > 1:
                 result['spacegroup_name'] = parts[1].strip().strip("'\"")
-        elif line.startswith('_chemical_formula_sum'):
+        elif lower.startswith('_chemical_formula_sum'):
             parts = line.split(None, 1)
             if len(parts) > 1:
                 result['formula'] = parts[1].strip().strip("'\"")
-        elif line.startswith('_cell_formula_units_Z'):
+        elif lower.startswith('_cell_formula_units_z'):
             v = parse_val(line.split()[-1])
             if v: result['Z'] = int(v)
 
@@ -1422,6 +1480,8 @@ def parse_cif(cif_text):
     elif 143 <= sg <= 167: result['system'] = 'trigonal'
     elif 168 <= sg <= 194: result['system'] = 'hexagonal'
     elif 195 <= sg <= 230: result['system'] = 'cubic'
+
+    result['spacegroup'] = result.get('spacegroup_name') or 'P 1'
 
     if result.get('Z') is None:
         result['Z'] = _infer_formula_units_z(result)
@@ -1450,7 +1510,7 @@ def _parse_atom_site_loop(lines, parse_val):
             headers = []
             while i < n:
                 hline = lines[i].strip()
-                if hline.startswith('_atom_site_'):
+                if hline.lower().startswith(('_atom_site_', '_atom_site.')):
                     headers.append(hline.lower())
                     i += 1
                 else:
@@ -1463,12 +1523,18 @@ def _parse_atom_site_loop(lines, parse_val):
             col_label = None  # _atom_site_label (fallback for element)
             col_x = col_y = col_z = col_occ = None
             for ci, h in enumerate(headers):
-                if h == '_atom_site_type_symbol':     col_type  = ci
-                elif h == '_atom_site_label':          col_label = ci
-                elif h == '_atom_site_fract_x':        col_x     = ci
-                elif h == '_atom_site_fract_y':        col_y     = ci
-                elif h == '_atom_site_fract_z':        col_z     = ci
-                elif h == '_atom_site_occupancy':      col_occ   = ci
+                if h in ('_atom_site_type_symbol',
+                         '_atom_site.type_symbol'):     col_type  = ci
+                elif h in ('_atom_site_label',
+                           '_atom_site.label'):         col_label = ci
+                elif h in ('_atom_site_fract_x',
+                           '_atom_site.fract_x'):       col_x     = ci
+                elif h in ('_atom_site_fract_y',
+                           '_atom_site.fract_y'):       col_y     = ci
+                elif h in ('_atom_site_fract_z',
+                           '_atom_site.fract_z'):       col_z     = ci
+                elif h in ('_atom_site_occupancy',
+                           '_atom_site.occupancy'):     col_occ   = ci
 
             # Must have at least fractional coordinates and some element id
             el_col = col_type if col_type is not None else col_label
@@ -1486,11 +1552,11 @@ def _parse_atom_site_loop(lines, parse_val):
                 try:
                     el_raw = parts[el_col].strip("'\"")
                     # Extract element symbol: strip trailing digits/charges
-                    el = re.match(r'([A-Z][a-z]?)', el_raw)
+                    el = re.match(r'([A-Za-z][a-z]?)', el_raw)
                     if not el:
                         i += 1
                         continue
-                    element = el.group(1)
+                    element = el.group(1).capitalize()
                     x = parse_val(parts[col_x])
                     y = parse_val(parts[col_y])
                     z = parse_val(parts[col_z])

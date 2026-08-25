@@ -88,14 +88,14 @@ try:
         compute_fit_statistics, cell_volume, molar_mass_from_formula,
         tch_fwhm_eta, size_from_Y, scherrer_size,
         generate_reflections, parse_cif, caglioti_fwhm,
-        expand_sites_from_cif,
+        expand_sites_from_cif, filter_reflections_by_relative_intensity,
     )
 except ImportError:
     from crystallography import (
         compute_fit_statistics, cell_volume, molar_mass_from_formula,
         tch_fwhm_eta, size_from_Y, scherrer_size,
         generate_reflections, parse_cif, caglioti_fwhm,
-        expand_sites_from_cif,
+        expand_sites_from_cif, filter_reflections_by_relative_intensity,
     )
 
 
@@ -4690,10 +4690,14 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             _source_cif = ph.get('cif_text', '') or ''
             if not _source_cif and str(ph.get('source', '')).lower() == 'mp':
                 try:
-                    from .cif_cache import get_cif as _get_cached_cif
+                    from .cif_cache import (
+                        get_cif as _get_cached_cif,
+                        mp_normal_cache_key as _mp_cache_key,
+                    )
                     _mp_key = ph.get('mp_id') or ph.get('cod_id')
                     if _mp_key:
-                        _source_cif = _get_cached_cif(f"mp:{_mp_key}") or ''
+                        _source_cif = _get_cached_cif(
+                            _mp_cache_key(_mp_key)) or ''
                 except Exception:
                     _source_cif = ''
             _tick_cif = _source_cif or _gsas_cif
@@ -4726,6 +4730,12 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                 # handled above.
                 _tick_cif = _gsas_cif or _source_cif
                 sites = _get_expanded_sites(_tick_cif, sg)
+                if sites:
+                    # _get_expanded_sites already returns the complete unit
+                    # cell.  Expanding it again inside generate_reflections
+                    # changes intensities and can create preview/fit tick
+                    # disagreements, especially for high-symmetry oxides.
+                    _tick_site_policy = 'expanded_full_cell_sites'
             phase_refs = generate_reflections(
                 a, b, c, alpha, beta, gamma, sys_, sg,
                 wavelength, tt_min, tt_max, hkl_max=12,
@@ -4760,7 +4770,11 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                                    if tt_min <= r[0] <= tt_max]
                 _tick_src_label = 'GSAS-II RefList'
             else:
-                tick_positions = [round(r[0], 3) for r in phase_refs]
+                tick_positions = [
+                    round(r[0], 3)
+                    for r in filter_reflections_by_relative_intensity(
+                        phase_refs)
+                ]
                 _tick_src_label = 'Python refs'
             print(f"  Tick positions for '{ph.get('name', '?')}' (SG {sg}): "
                   f"{len(tick_positions)} reflections in "

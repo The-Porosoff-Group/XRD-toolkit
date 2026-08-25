@@ -310,8 +310,11 @@ def run_lebail(tt, y_obs, sigma, phases, wavelength,
         # Use pymatgen expansion to get full unit cell for correct F²,
         # then fall back to raw parse_cif (asymmetric unit only).
         sites = ph.get('sites')
+        site_policy = 'auto'
         if not sites and ph.get('cif_text'):
             sites = expand_sites_from_cif(ph['cif_text'])
+            if sites:
+                site_policy = 'expanded_full_cell_sites'
             if not sites:
                 try:
                     _parsed = _parse_cif_cryst(ph['cif_text'])
@@ -319,13 +322,14 @@ def run_lebail(tt, y_obs, sigma, phases, wavelength,
                 except Exception:
                     sites = None
         ph['_sites'] = sites or None  # stash for cell-refinement regeneration
+        ph['_site_policy'] = site_policy
 
         refs = generate_reflections(
             a, b, c, al, be, ga,
             ph.get('system', 'triclinic'),
             ph.get('spacegroup_number', 1),
             wavelength, tt_min, tt_max, hkl_max=12,
-            sites=ph['_sites']
+            sites=ph['_sites'], site_policy=site_policy
         )
 
         # Seed I_hkl — use pymatgen if CIF is available
@@ -533,7 +537,8 @@ def run_lebail(tt, y_obs, sigma, phases, wavelength,
                             a_,b_,c_,al_,be_,ga_, sys_,
                             ph.get('spacegroup_number', 1),
                             wavelength, tt_min, tt_max, hkl_max=12,
-                            sites=ph.get('_sites'))
+                            sites=ph.get('_sites'),
+                            site_policy=ph.get('_site_policy', 'auto'))
                     except Exception:
                         pass
                     cache['fv'] = list(fv)
@@ -576,7 +581,8 @@ def run_lebail(tt, y_obs, sigma, phases, wavelength,
                     a_n, b_n, c_n, al_n, be_n, ga_n, sys_,
                     ph.get('spacegroup_number', 1),
                     wavelength, tt_min, tt_max, hkl_max=12,
-                    sites=ph.get('_sites'))
+                    sites=ph.get('_sites'),
+                    site_policy=ph.get('_site_policy', 'auto'))
             except Exception:
                 refs_new = st['refs']
 
@@ -825,8 +831,11 @@ def run_rietveld(tt, y_obs, sigma, phases, wavelength,
         # Extract atom sites — use pymatgen expansion for correct F²,
         # then fall back to raw parse_cif (asymmetric unit only).
         sites = ph.get('sites')
+        site_policy = 'auto'
         if not sites and ph.get('cif_text'):
             sites = expand_sites_from_cif(ph['cif_text'])
+            if sites:
+                site_policy = 'expanded_full_cell_sites'
             if not sites:
                 try:
                     parsed = _parse_cif_cryst(ph['cif_text'])
@@ -844,7 +853,8 @@ def run_rietveld(tt, y_obs, sigma, phases, wavelength,
 
         refs = generate_reflections_rietveld(
             a, b, c, al, be, ga, sys_, sg,
-            wavelength, tt_min, tt_max, sites, hkl_max=12
+            wavelength, tt_min, tt_max, sites, hkl_max=12,
+            site_policy=site_policy
         )
 
         # Initial B_iso estimate (0.5 Å² is typical for metals)
@@ -853,6 +863,7 @@ def run_rietveld(tt, y_obs, sigma, phases, wavelength,
         phase_state.append({
             'ph':     ph,
             'sites':  sites,
+            'site_policy': site_policy,
             'refs':   refs,
             'S':      1.0,
             'B_iso':  B_init,
@@ -1044,7 +1055,9 @@ def run_rietveld(tt, y_obs, sigma, phases, wavelength,
                         try:
                             cache['refs'] = generate_reflections_rietveld(
                                 a_,b_,c_,al_,be_,ga_, st['sys'], st['sg'],
-                                wavelength, tt_min, tt_max, st['sites'], hkl_max=12)
+                                wavelength, tt_min, tt_max, st['sites'],
+                                hkl_max=12,
+                                site_policy=st.get('site_policy', 'auto'))
                         except Exception:
                             pass
                         cache['fv'] = list(fv)
@@ -1092,7 +1105,8 @@ def run_rietveld(tt, y_obs, sigma, phases, wavelength,
                 try:
                     st['refs'] = generate_reflections_rietveld(
                         a_n, b_n, c_n, al_n, be_n, ga_n, sys_, sg,
-                        wavelength, tt_min, tt_max, sites, hkl_max=12)
+                        wavelength, tt_min, tt_max, sites, hkl_max=12,
+                        site_policy=st.get('site_policy', 'auto'))
                 except Exception:
                     pass
 

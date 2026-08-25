@@ -5,11 +5,11 @@ Persistent disk cache for CIF files.
 Stores CIF text files in ~/.catalysis_toolkit_cache/ (or a custom directory
 from config.yaml). Cache is keyed by source:id strings, e.g.:
   "cod:1010048"   → COD entry (raw COD CIF)
-  "mp:mp-91:normal:v2" → audited fixture or API-derived conventional CIF
+  "mp:mp-91:normal:v3" → audited fixture or API-derived conventional CIF
   "manual:sample" → user-uploaded CIF
 
 SEPARATION RULE (source vs. prepared):
-  MP source CIFs use versioned ``mp:<id>:normal:v2`` keys. GSAS-II
+  MP source CIFs use versioned ``mp:<id>:normal:v3`` keys. GSAS-II
   preparation is performed from that immutable source for each refinement;
   prepared CIFs and preview reflections never overwrite the source key.
   Legacy ``mp:<id>`` and ``mp:<id>:gsas:v1`` keys are intentionally ignored
@@ -19,15 +19,35 @@ Cache never expires — CIF files don't change.
 Size is capped at max_size_mb (default 500 MB); oldest files pruned when exceeded.
 """
 
-import os, json, hashlib, time
+import os, json, hashlib, re, time
 from pathlib import Path
 
 
-MP_NORMAL_CACHE_VERSION = 'v2'
+MP_NORMAL_CACHE_VERSION = 'v3'
+
+
+def normalize_mp_id(mp_id):
+    """Return the familiar numeric MP identifier for current encoded IDs.
+
+    Materials Project's current API serializes numeric identifiers as an
+    eight-letter, zero-padded base-26 suffix (``a`` = 0), while continuing to
+    accept the historical numeric alias.  For example, ``mp-aaaabdws`` is
+    ``mp-20194`` and ``mp-aaaaadag`` is ``mp-2034``.  Normalizing at the cache
+    boundary keeps fixture routing, saved presets, and cache entries stable
+    across API database versions.
+    """
+    value = str(mp_id or '').strip().lower()
+    match = re.fullmatch(r'mp-([a-z]{8})', value)
+    if not match:
+        return value
+    numeric = 0
+    for char in match.group(1):
+        numeric = numeric * 26 + (ord(char) - ord('a'))
+    return f'mp-{numeric}'
 
 
 def mp_normal_cache_key(mp_id):
-    return f"mp:{str(mp_id)}:normal:{MP_NORMAL_CACHE_VERSION}"
+    return f"mp:{normalize_mp_id(mp_id)}:normal:{MP_NORMAL_CACHE_VERSION}"
 
 
 class CIFCache:
@@ -140,9 +160,6 @@ class CIFCache:
         self._save_index()
 
 
-import re  # needed by _key_to_filename
-
-
 # ── Module-level singleton ────────────────────────────────────────────────────
 
 _cache_instance = None
@@ -196,6 +213,7 @@ def cached_fetch_mp(mp_id, api_key, fetch_fn):
     cached previously.  The cache is also refreshed with the fixture
     so downstream consumers stay consistent.
     """
+    mp_id = normalize_mp_id(mp_id)
     cache = get_cache()
     key = mp_normal_cache_key(mp_id)
 

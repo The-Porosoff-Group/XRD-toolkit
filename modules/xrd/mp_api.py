@@ -9,13 +9,15 @@ Your key (from next-gen.materialsproject.org/api) works ONLY with:
 The v2 legacy API (materialsproject.org/rest/v2) requires a SEPARATE legacy
 key from legacy.materialsproject.org/open — do not mix them up.
 
-Key rule for the new API: do NOT request 'structure' in the fields parameter
-via raw REST — it causes a 400. Only request scalar/simple fields.
+The current summary endpoint accepts ``structure`` in ``_fields``.  Structure
+records are normalized to conventional, symmetry-bearing CIF text before they
+enter the rest of the toolkit.
 """
 
-import os, re, requests, json
+import math, os, re, requests, json
 from .crystallography import parse_cif, conventionalize_phase_cell
 from .cod_api import infer_system, _sf
+from .cif_cache import normalize_mp_id
 
 MP_SUMMARY = "https://api.materialsproject.org/materials/summary/"
 TIMEOUT    = 15
@@ -127,7 +129,7 @@ def _fixture_cif_for(mp_id, purpose=None):
     Raw/P1 fixtures remain accessible to audit and regression callers that do
     not request a production purpose.
     """
-    mp_id = str(mp_id)
+    mp_id = normalize_mp_id(mp_id)
     fname = _LOCAL_FIXTURES.get(mp_id)
     if not fname:
         return None
@@ -149,7 +151,7 @@ def _fixture_cif_for(mp_id, purpose=None):
 
 def _fixture_metadata_for(mp_id):
     """Return curated metadata for a local fixture, if any."""
-    return dict(_LOCAL_FIXTURE_METADATA.get(str(mp_id), {}))
+    return dict(_LOCAL_FIXTURE_METADATA.get(normalize_mp_id(mp_id), {}))
 
 
 def _fixture_manifest():
@@ -164,7 +166,7 @@ def _fixture_manifest():
 
 def _fixture_record_for(mp_id):
     """Return manifest record for the fixture mapped to an mp-id."""
-    fname = _LOCAL_FIXTURES.get(str(mp_id))
+    fname = _LOCAL_FIXTURES.get(normalize_mp_id(mp_id))
     if not fname:
         return {}
     return dict(_fixture_manifest().get(fname, {}))
@@ -338,7 +340,8 @@ def _parse(entries):
     results = []
     for e in entries:
         try:
-            mp_id   = str(e.get("material_id", ""))
+            api_mp_id = str(e.get("material_id", ""))
+            mp_id = normalize_mp_id(api_mp_id)
             formula = str(e.get("formula_pretty", ""))
             sym     = e.get("symmetry") or {}
             sg_sym  = str(sym.get("symbol", ""))
@@ -361,6 +364,7 @@ def _parse(entries):
 
             result = conventionalize_phase_cell({
                 "mp_id":             mp_id,
+                "mp_api_id":         api_mp_id,
                 "cod_id":            mp_id,
                 "formula":           formula,
                 "name":              formula,
@@ -453,8 +457,11 @@ def fetch_cif(mp_id, api_key):
     """
     Fetch structure for a Materials Project entry and convert to CIF.
     The new API has no dedicated /cif endpoint — we request 'structure'
-    from the summary endpoint then convert via pymatgen.
+    from the summary endpoint, parse it with pymatgen, and use spglib to write
+    a conventional symmetry-bearing CIF.
     """
+    requested_mp_id = str(mp_id)
+    mp_id = normalize_mp_id(requested_mp_id)
     fixture_text = _fixture_cif_for(mp_id, purpose='normal_import')
     if fixture_text:
         print(f"  fetch_cif: using local fixture for {mp_id} "
@@ -493,6 +500,7 @@ def fetch_cif(mp_id, api_key):
         raise RuntimeError(f"No entry found for {mp_id}")
 
     entry   = data[0]
+    api_mp_id = str(entry.get('material_id') or requested_mp_id)
     struct  = entry.get("structure")
     formula = entry.get("formula_pretty", "")
     sym     = entry.get("symmetry") or {}
@@ -501,12 +509,12 @@ def fetch_cif(mp_id, api_key):
         raise RuntimeError(f"No structure data returned for {mp_id} "
                            f"— 'structure' may not be available via raw REST")
 
-    # Convert pymatgen structure dict to CIF text
+    # Convert the pymatgen structure dict to conventional CIF text.
     cif_text = _structure_dict_to_cif(struct, mp_id, formula, sym)
 
     parsed = parse_cif(cif_text)
     _source_cif_sg = int(parsed.get('spacegroup_number') or 1)
-    parsed.update({"mp_id": mp_id, "cod_id": mp_id,
+    parsed.update({"mp_id": mp_id, "mp_api_id": api_mp_id, "cod_id": mp_id,
                    "formula": formula, "cif_text": cif_text, "source": "mp"})
     parsed['source_cif_spacegroup_number'] = _source_cif_sg
     parsed['cif_preparation_policy'] = (
@@ -514,9 +522,9 @@ def fetch_cif(mp_id, api_key):
         if _source_cif_sg > 1
         else 'mp_p1_full_cell_fallback')
 
-    # Merge MP symmetry data — pymatgen writes P1 CIFs from Structure dicts
-    # (no symmetry info), so parse_cif returns spacegroup_number=1.  The MP
-    # API's symmetry field has the correct space group.
+    # Merge the authoritative MP symmetry metadata.  The direct-spglib path
+    # writes matching symmetry into the CIF; the P1 emergency fallback does
+    # not, so this also keeps result metadata informative in that case.
     if sym:
         if sym.get('number'):
             parsed['spacegroup_number'] = int(sym['number'])
@@ -529,122 +537,196 @@ def fetch_cif(mp_id, api_key):
     return parsed
 
 
+def _element_symbol(specie):
+    symbol = getattr(specie, 'symbol', None)
+    if symbol:
+        return str(symbol)
+    element = getattr(specie, 'element', None)
+    if element is not None and getattr(element, 'symbol', None):
+        return str(element.symbol)
+    match = re.match(r'([A-Z][a-z]?)', str(specie))
+    return match.group(1) if match else 'X'
+
+
+def _symop_component(coeffs, translation):
+    """Format one spglib affine component as a CIF xyz expression."""
+    from fractions import Fraction
+    terms = []
+    for coefficient, variable in zip(coeffs, ('x', 'y', 'z')):
+        coefficient = int(coefficient)
+        if not coefficient:
+            continue
+        sign = '-' if coefficient < 0 else '+'
+        magnitude = abs(coefficient)
+        body = variable if magnitude == 1 else f'{magnitude}{variable}'
+        terms.append((sign, body))
+    fraction = Fraction(float(translation) % 1.0).limit_denominator(24)
+    if fraction:
+        terms.append(('+', (str(fraction.numerator) if fraction.denominator == 1
+                            else f'{fraction.numerator}/{fraction.denominator}')))
+    if not terms:
+        return '0'
+    first_sign, first_body = terms[0]
+    text = ('-' if first_sign == '-' else '') + first_body
+    for sign, body in terms[1:]:
+        text += sign + body
+    return text
+
+
+def _spglib_conventional_cif(struct_dict, mp_id, formula, sym):
+    """Build a matching conventional/asymmetric CIF without pymatgen SGA.
+
+    ``SpacegroupAnalyzer.get_conventional_standard_structure`` and
+    ``CifWriter(symprec=...)`` can terminate the interpreter for valid oxide
+    structures in the bundled Windows environment.  Direct spglib calls are
+    stable.  They also provide the conventional cell, equivalence classes,
+    and exact symmetry operations in one internally consistent setting.
+    """
+    import numpy as np
+    import spglib
+    from pymatgen.core import Structure
+
+    structure = Structure.from_dict(struct_dict)
+    signatures = []
+    signature_ids = {}
+    site_types = []
+    for site in structure:
+        signature = tuple(sorted(
+            (_element_symbol(specie), round(float(occupancy), 8))
+            for specie, occupancy in site.species.items()))
+        if signature not in signature_ids:
+            signature_ids[signature] = len(signatures) + 1
+            signatures.append(signature)
+        site_types.append(signature_ids[signature])
+
+    cell = (np.asarray(structure.lattice.matrix, dtype=float),
+            np.asarray(structure.frac_coords, dtype=float), site_types)
+    expected_sg = int((sym or {}).get('number') or 1)
+
+    for symprec in (0.01, 0.05, 0.1, 0.2):
+        standardized = spglib.standardize_cell(
+            cell, to_primitive=False, no_idealize=False, symprec=symprec)
+        if standardized is None:
+            continue
+        dataset = spglib.get_symmetry_dataset(standardized, symprec=symprec)
+        if dataset is None:
+            continue
+        detected_sg = int(dataset.number)
+        if expected_sg > 1 and detected_sg != expected_sg:
+            continue
+
+        lattice, positions, standardized_types = standardized
+        lengths = [float(np.linalg.norm(vector)) for vector in lattice]
+
+        def angle(first, second):
+            denominator = np.linalg.norm(first) * np.linalg.norm(second)
+            cosine = float(np.dot(first, second) / denominator)
+            return math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
+
+        alpha = angle(lattice[1], lattice[2])
+        beta = angle(lattice[0], lattice[2])
+        gamma = angle(lattice[0], lattice[1])
+        volume = abs(float(
+            lattice[0][0] * (lattice[1][1] * lattice[2][2]
+                             - lattice[1][2] * lattice[2][1])
+            - lattice[0][1] * (lattice[1][0] * lattice[2][2]
+                               - lattice[1][2] * lattice[2][0])
+            + lattice[0][2] * (lattice[1][0] * lattice[2][1]
+                               - lattice[1][1] * lattice[2][0])))
+        sg_symbol = str(dataset.international).strip() or str(
+            (sym or {}).get('symbol') or 'P 1')
+
+        representative_indices = []
+        seen_orbits = set()
+        for index, orbit in enumerate(dataset.equivalent_atoms):
+            orbit = int(orbit)
+            if orbit not in seen_orbits:
+                seen_orbits.add(orbit)
+                representative_indices.append(index)
+
+        atom_lines = []
+        label_counts = {}
+        for index in representative_indices:
+            signature = signatures[int(standardized_types[index]) - 1]
+            x, y, z = (float(value) % 1.0 for value in positions[index])
+            for element, occupancy in signature:
+                label_counts[element] = label_counts.get(element, 0) + 1
+                atom_lines.append(
+                    f" {element}{label_counts[element]:<6} {element:<4} "
+                    f"{x:.8f} {y:.8f} {z:.8f} {occupancy:.6f}")
+
+        symop_lines = []
+        seen_operations = set()
+        for rotation, translation in zip(dataset.rotations,
+                                         dataset.translations):
+            operation = ','.join(
+                _symop_component(rotation[row], translation[row])
+                for row in range(3))
+            if operation not in seen_operations:
+                seen_operations.add(operation)
+                symop_lines.append(f" '{operation}'")
+
+        if not atom_lines or not symop_lines:
+            continue
+        print(f"  MP CIF ({mp_id}): spglib standardized to SG "
+              f"{detected_sg}, {len(standardized_types)} full-cell sites, "
+              f"{len(representative_indices)} asymmetric site(s) "
+              f"(symprec={symprec}).", flush=True)
+        symop_text = '\n'.join(symop_lines)
+        atom_text = '\n'.join(atom_lines)
+        return f"""data_{mp_id}
+_audit_creation_method           'Catalysis Toolkit direct spglib standardization'
+_cell_length_a                   {lengths[0]:.8f}
+_cell_length_b                   {lengths[1]:.8f}
+_cell_length_c                   {lengths[2]:.8f}
+_cell_angle_alpha                {alpha:.6f}
+_cell_angle_beta                 {beta:.6f}
+_cell_angle_gamma                {gamma:.6f}
+_cell_volume                     {volume:.8f}
+_symmetry_space_group_name_H-M   '{sg_symbol}'
+_symmetry_Int_Tables_number      {detected_sg}
+_chemical_formula_sum            '{formula}'
+loop_
+ _space_group_symop_operation_xyz
+{symop_text}
+loop_
+ _atom_site_label
+ _atom_site_type_symbol
+ _atom_site_fract_x
+ _atom_site_fract_y
+ _atom_site_fract_z
+ _atom_site_occupancy
+{atom_text}
+"""
+    return None
+
+
 def _structure_dict_to_cif(struct_dict, mp_id, formula, sym):
-    """
-    Convert a pymatgen structure JSON dict to CIF text.
-    Tries pymatgen first; falls back to hand-building minimal CIF.
+    """Convert a Materials Project structure JSON dict to a safe CIF.
 
-    CRITICAL: The CIF must be self-consistent — the atom sites and the
-    declared space group must match.  If CifWriter detects a different
-    space group than MP declares, we must NOT patch the SG tags because
-    that would create a mismatch (asymmetric unit reduced for SG_detected
-    but declared as SG_MP → GSAS-II expands with wrong symmetry).
-
-    Similarly, if CifWriter falls back to P1 (full cell), we must NOT
-    patch in the real SG because that would cause double-expansion
-    (full-cell sites + non-P1 SG → GSAS-II expands all atoms again).
+    The primary route standardizes the cell and reduces the asymmetric unit
+    with direct spglib data, rejecting any result whose detected space group
+    differs from the MP summary record.  A plain P1 CifWriter dump is the safe
+    fallback; space-group headers are never patched onto full-cell sites.
     """
-    # Try pymatgen CifWriter with symmetry detection so the CIF
-    # contains the correct space group (not P1).
+    try:
+        standardized = _spglib_conventional_cif(
+            struct_dict, mp_id, formula, sym)
+        if standardized:
+            return standardized
+    except BaseException as exc:
+        print(f"  MP CIF ({mp_id}): direct spglib standardization failed "
+              f"({exc}); using a self-consistent P1 fallback.", flush=True)
+
     try:
         from pymatgen.core import Structure
         from pymatgen.io.cif import CifWriter
-        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-        struct = Structure.from_dict(struct_dict)
-        sg_num = sym.get("number", 1)
-        full_cell_n = len(struct)
-        conventional_struct = None
-
-        # Try multiple symprec values — tight first (preserves distinct
-        # Wyckoff sites in compact cells like W2C), then looser.
-        for symprec in (0.01, 0.05, 0.1, 0.2):
-            try:
-                analyzer = SpacegroupAnalyzer(struct, symprec=symprec)
-                detected_sg = int(analyzer.get_space_group_number() or 1)
-                if sg_num > 1 and detected_sg != int(sg_num):
-                    print(
-                        f"  MP CIF ({mp_id}): symmetry analyzer detected "
-                        f"SG {detected_sg}, MP declares {sg_num} at "
-                        f"symprec={symprec}; trying another tolerance.",
-                        flush=True)
-                    continue
-                conventional_struct = (
-                    analyzer.get_conventional_standard_structure())
-                candidate_n = len(conventional_struct)
-                writer = CifWriter(
-                    conventional_struct, symprec=symprec)
-                import tempfile, os
-                with tempfile.NamedTemporaryFile(
-                        suffix=".cif", delete=False, mode="w") as f:
-                    tmp = f.name
-                writer.write_file(tmp)
-                with open(tmp) as f:
-                    cif_text = f.read()
-                os.unlink(tmp)
-
-                # Parse what CifWriter produced to check consistency
-                from .crystallography import parse_cif as _pc
-                written_parsed = _pc(cif_text)
-                written_sg = written_parsed.get('spacegroup_number', 1)
-                written_sites = written_parsed.get('sites') or []
-
-                # Check if CifWriter actually reduced the structure
-                if written_sg > 1 and len(written_sites) < candidate_n:
-                    # CifWriter succeeded in finding symmetry and reducing.
-                    # Check if the detected SG matches what MP declares.
-                    if written_sg == sg_num:
-                        # Perfect match — use as-is
-                        return cif_text
-                    else:
-                        # Different SG detected.  DO NOT keep this CIF — the
-                        # sites are reduced for SG_detected, but downstream
-                        # code (_build_conventional_cif) will declare them as
-                        # SG_declared (from the phase dict), causing GSAS-II
-                        # to expand with the WRONG symmetry operations.
-                        # Instead, let it fall through to the P1 fallback,
-                        # which _build_conventional_cif handles safely.
-                        print(f"  MP CIF ({mp_id}): CifWriter detected "
-                              f"SG {written_sg} (MP declares {sg_num}) "
-                              f"at symprec={symprec} — DISCARDING to avoid "
-                              f"SG mismatch", flush=True)
-                        continue
-                elif written_sg <= 1 or len(written_sites) >= candidate_n:
-                    # CifWriter fell back to P1 (no symmetry detected) or
-                    # didn't reduce the sites.  DO NOT patch in the real SG
-                    # — that would cause GSAS-II to double-expand.
-                    continue
-
-            except Exception:
-                continue
-
-        # No symprec produced a matching-SG reduction — try plain CifWriter (no symprec).
-        # This writes P1 with all atoms, which is the safest fallback:
-        # GSAS-II's _build_conventional_cif will detect the P1 + full cell
-        # and handle it appropriately.
-        try:
-            fallback_struct = (
-                conventional_struct
-                if conventional_struct is not None else struct)
-            writer = CifWriter(fallback_struct)
-            full_cell_n = len(fallback_struct)
-            import tempfile, os
-            with tempfile.NamedTemporaryFile(
-                    suffix=".cif", delete=False, mode="w") as f:
-                tmp = f.name
-            writer.write_file(tmp)
-            with open(tmp) as f:
-                cif_text = f.read()
-            os.unlink(tmp)
-            # DO NOT patch P1 to the declared SG — the sites are the full cell
-            print(f"  MP CIF ({mp_id}): CifWriter wrote P1 (full cell, "
-                  f"{full_cell_n} atoms). NOT patching to SG {sg_num} — "
-                  f"_build_conventional_cif will handle reduction.",
-                  flush=True)
-            return cif_text
-        except Exception:
-            pass
-
-    except Exception:
+        structure = Structure.from_dict(struct_dict)
+        cif_text = str(CifWriter(structure))
+        print(f"  MP CIF ({mp_id}): wrote P1 fallback with "
+              f"{len(structure)} source-cell sites.", flush=True)
+        return cif_text
+    except BaseException:
         pass
 
     # Fallback: build a minimal CIF from the lattice dict
@@ -655,16 +737,23 @@ def _structure_dict_to_cif(struct_dict, mp_id, formula, sym):
     al = lattice.get("alpha",  90.0)
     be = lattice.get("beta",   90.0)
     ga = lattice.get("gamma",  90.0)
-    sg_num = sym.get("number", 1)
-    sg_sym = sym.get("symbol", "P 1")
+    # This fallback writes every source-cell site, so it must remain P1.
+    # Declaring the MP summary SG here would make downstream readers expand
+    # the already-complete site list a second time.
+    sg_num = 1
+    sg_sym = "P 1"
 
     sites = struct_dict.get("sites", [])
     atom_lines = ""
     for i, site in enumerate(sites):
-        sp  = site.get("species", [{}])[0].get("element", "X")
+        species = site.get("species", [{}])
         abc = site.get("abc", [0, 0, 0])
-        atom_lines += (f" {sp}{i+1:<6} {sp:<4} "
-                       f"{abc[0]:.6f} {abc[1]:.6f} {abc[2]:.6f} 1.000\n")
+        for j, component in enumerate(species):
+            sp = component.get("element", "X")
+            occupancy = float(component.get("occu", 1.0) or 1.0)
+            atom_lines += (f" {sp}{i+1}_{j+1:<4} {sp:<4} "
+                           f"{abc[0]:.6f} {abc[1]:.6f} {abc[2]:.6f} "
+                           f"{occupancy:.6f}\n")
 
     return f"""data_{mp_id}
 _cell_length_a                  {a:.6f}
