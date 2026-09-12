@@ -8,8 +8,9 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from matplotlib.ticker import FuncFormatter, MaxNLocator
 import numpy as np
+import re
 
-from modules.plot_style import arial_plot, scientific_mathtext
+from modules.plot_style import arial_plot, scientific_mathtext, scientific_runs
 from .presentation import (
     clean_descriptive_text,
     enrich_phase_results,
@@ -226,9 +227,10 @@ def make_xrd_plot(result, metadata, output_path, theme=None):
     )
     custom_title = str(metadata.get('figure_title', '')).strip()
     sample_label = custom_title or (
-        str(metadata.get('sample_id', 'Sample')).strip().replace('_', ' ')
+        re.sub(r'_(?!\{)', ' ', str(metadata.get('sample_id', 'Sample')).strip())
         or 'Sample')
-    title_fontsize = max(9.2, 12.4 - max(len(sample_label) - 42, 0) * 0.08)
+    visible_title_length = sum(len(value) for value, _ in scientific_runs(sample_label))
+    title_fontsize = max(9.2, 12.4 - max(visible_title_length - 42, 0) * 0.08)
     if show_figure_title:
         ax_main.set_title(
             scientific_mathtext(sample_label, bold=True),

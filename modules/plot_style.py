@@ -76,6 +76,8 @@ _FORMULA = re.compile(
     r'(?P<formula>(?:[A-Z][a-z]?(?:\d+(?:\.\d+)?(?:-x)?)?)+)(?![A-Za-z0-9])')
 _SCRIPT = re.compile(
     rf'[{_SUB}]+(?:\.[{_SUB}]+)*|[{_SUP}]+|[0-9][\u0304\u0305]')
+_EXPLICIT_SCRIPT = re.compile(r'([_^])\{([^{}\r\n]+)\}')
+_LABEL_WORD = re.compile(r'(?:[_^]\{[^{}\r\n]+\}|\S)+')
 
 
 def scientific_unicode(text):
@@ -98,24 +100,46 @@ def scientific_unicode(text):
     return _FORMULA.sub(formula, str(text or ''))
 
 
-def scientific_runs(text):
-    """Return (text, normal/sub/sup/bar) runs without changing source data."""
-    value = scientific_unicode(text)
+def scientific_runs(text, *, recognize_formulas=True):
+    """Typeset formulas, Unicode scripts, and explicit _{text}/^{text} codes.
+
+    Braces are required so ordinary underscores in sample IDs stay literal.
+    Explicit contents are plain text, including letters and decimal counts;
+    they do not require a TeX installation or change the underlying metadata.
+    """
     runs = []
-    end = 0
-    for match in _SCRIPT.finditer(value):
-        if match.start() > end:
-            runs.append((value[end:match.start()], 'normal'))
-        token = match.group(0)
-        if token[0] in _SUB:
-            runs.append((token.translate(_FROM_SUB), 'sub'))
-        elif token[0] in _SUP:
-            runs.append((token.translate(_FROM_SUP), 'sup'))
+
+    def append(value, style):
+        if not value:
+            return
+        if runs and runs[-1][1] == style and style != 'bar':
+            runs[-1] = (runs[-1][0] + value, style)
         else:
-            runs.append((token[0], 'bar'))
+            runs.append((value, style))
+
+    def plain(value):
+        value = scientific_unicode(value) if recognize_formulas else value
+        end = 0
+        for match in _SCRIPT.finditer(value):
+            append(value[end:match.start()], 'normal')
+            token = match.group(0)
+            if token[0] in _SUB:
+                append(token.translate(_FROM_SUB), 'sub')
+            elif token[0] in _SUP:
+                append(token.translate(_FROM_SUP), 'sup')
+            else:
+                append(token[0], 'bar')
+            end = match.end()
+        append(value[end:], 'normal')
+
+    value = str(text or '')
+    end = 0
+    for match in _EXPLICIT_SCRIPT.finditer(value):
+        plain(value[end:match.start()])
+        append(match[2].translate(_FROM_SUB).translate(_FROM_SUP),
+               'sub' if match[1] == '_' else 'sup')
         end = match.end()
-    if end < len(value):
-        runs.append((value[end:], 'normal'))
+    plain(value[end:])
     return runs
 
 
@@ -127,32 +151,30 @@ def scientific_mathtext(text, *, bold=False, recognize_formulas=True):
         return ''.join(part if index % 2 else scientific_mathtext(
             part, bold=bold, recognize_formulas=recognize_formulas)
                        for index, part in enumerate(parts))
-    value = scientific_unicode(text) if recognize_formulas else str(text or '')
     escapes = {'\\': r'\backslash ', '{': r'\{', '}': r'\}',
-               '_': r'\_', '$': r'\$', '%': r'\%'}
+               '_': r'\_', '$': r'\$', '%': r'\%', ' ': r'\ ',
+               '^': r'\text{^}'}
 
     def word(match):
         value = match.group(0)
-        if not _SCRIPT.search(value):
+        runs = scientific_runs(value, recognize_formulas=recognize_formulas)
+        if not any(style != 'normal' for _, style in runs):
             return value.replace('$', r'\$')
-        # Formula recognition already occurred; script tokens alone are enough.
         rendered = []
-        end = 0
-        for token in _SCRIPT.finditer(value):
-            rendered.extend(escapes.get(char, char) for char in value[end:token.start()])
-            part = token.group(0)
-            if part[0] in _SUB:
-                rendered.append('_{' + part.translate(_FROM_SUB) + '}')
-            elif part[0] in _SUP:
-                rendered.append('^{' + part.translate(_FROM_SUP) + '}')
+        for value, style in runs:
+            part = ''.join(escapes.get(char, char) for char in value)
+            if style == 'sub':
+                rendered.append('_{' + part + '}')
+            elif style == 'sup':
+                rendered.append('^{' + part + '}')
+            elif style == 'bar':
+                rendered.append(r'\overline{' + part + '}')
             else:
-                rendered.append(r'\overline{' + part[0] + '}')
-            end = token.end()
-        rendered.extend(escapes.get(char, char) for char in value[end:])
+                rendered.append(part)
         font = 'mathbf' if bold else 'mathrm'
         return '$\\' + font + '{' + ''.join(rendered) + '}$'
 
-    return re.sub(r'\S+', word, value)
+    return _LABEL_WORD.sub(word, str(text or ''))
 
 
 class ScientificDraw:
@@ -175,20 +197,28 @@ class ScientificDraw:
         small = font.font_variant(size=max(7, round(font.size * 0.70)))
         ascent, descent = font.getmetrics()
         cursor = 0.0
+        script_start = None
         placed, boxes = [], []
         for value, style in runs:
+            if style in ('sub', 'sup'):
+                if script_start is None:
+                    script_start = cursor
+                start = script_start
+            else:
+                script_start = None
+                start = cursor
             face = small if style in ('sub', 'sup') else font
             shift = (font.size * 0.20 if style == 'sub' else
                      -font.size * 0.40 if style == 'sup' else 0)
             baseline = ascent + shift
             left, top, right, bottom = face.getbbox(value, anchor='ls')
-            box = (cursor + left, baseline + top,
-                   cursor + right, baseline + bottom)
+            box = (start + left, baseline + top,
+                   start + right, baseline + bottom)
             if style == 'bar':
                 box = (box[0], box[1] - max(2, font.size * 0.10), box[2], box[3])
             boxes.append(box)
-            placed.append((cursor, baseline, value, face, style, box))
-            cursor += face.getlength(value)
+            placed.append((start, baseline, value, face, style, box))
+            cursor = max(cursor, start + face.getlength(value))
         bounds = (min(b[0] for b in boxes), min(b[1] for b in boxes),
                   max(b[2] for b in boxes), max(b[3] for b in boxes))
         anchor = anchor or 'la'
