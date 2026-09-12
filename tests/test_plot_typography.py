@@ -40,7 +40,8 @@ class PlotTypographyTests(unittest.TestCase):
 
     def test_rotated_labels_include_scripts_and_descenders_inside_padding(self):
         for label in ('CO2 Conversion (%)', 'Quantity adsorbed (cm³ STP/g)',
-                      '1 / [Q(p₀/p − 1)]', 'Fit (R²=0.99999)', 'CeO₂ (Fm3̅m)'):
+                      '1 / [Q(p₀/p − 1)]', 'Fit (R²=0.99999)', 'CeO₂ (Fm3̅m)',
+                      'Ce_{0.8}Zr_{0.2}O_{x}', 'Area (m^{2} g^{-1})', 'Fe_{x}^{3+}'):
             for size in (13, 28, 48):
                 with self.subTest(label=label, size=size):
                     image = scientific_text_image(label, load_plot_font(size))
@@ -56,7 +57,7 @@ class PlotTypographyTests(unittest.TestCase):
             canvas = Image.new('RGBA', (900, 200))
             draw = ScientificDraw(canvas)
             font = load_plot_font(32)
-            text = 'CO2 / H2, p/p₀, R²'
+            text = 'CO2 / H2, p/p₀, R², CeZrO_{x}, Fe_{x}^{3+}'
             measured = draw.textbbox((450, 100), text, font=font, anchor=anchor)
             draw.text((450, 100), text, font=font, fill='black', anchor=anchor)
             ink = canvas.getbbox()
@@ -64,6 +65,53 @@ class PlotTypographyTests(unittest.TestCase):
             self.assertLessEqual(measured[1], ink[1])
             self.assertGreaterEqual(measured[2], ink[2])
             self.assertGreaterEqual(measured[3], ink[3])
+
+    def test_explicit_scripts_accept_variables_counts_and_units(self):
+        self.assertEqual(scientific_runs('Ce_{0.8}Zr_{0.2}O_{x}'), [
+            ('Ce', 'normal'), ('0.8', 'sub'), ('Zr', 'normal'),
+            ('0.2', 'sub'), ('O', 'normal'), ('x', 'sub')])
+        self.assertEqual(scientific_runs('Rate_{CO2} (mol g^{-1} h^{-1})'), [
+            ('Rate', 'normal'), ('CO2', 'sub'), (' (mol g', 'normal'),
+            ('-1', 'sup'), (' h', 'normal'), ('-1', 'sup'), (')', 'normal')])
+        self.assertEqual(scientific_runs('Sample_12 at 400 °C'), [('Sample_12 at 400 °C', 'normal')])
+        for text in ('CeZrO_{x', 'CeZrO_{}', 'CeZrO_x', 'sample^{'):
+            self.assertEqual(scientific_runs(text), [(text, 'normal')])
+
+    def test_explicit_and_unicode_scripts_have_identical_pillow_rendering(self):
+        for explicit, unicode in [('CeZrO_{x}', 'CeZrOₓ'),
+                                 ('Ce_{0.8}Zr_{0.2}O_{2}', 'Ce₀.₈Zr₀.₂O₂'),
+                                 ('Area (m^{2} g^{-1})', 'Area (m² g⁻¹)')]:
+            with self.subTest(explicit=explicit):
+                code = scientific_text_image(explicit, load_plot_font(34))
+                existing = scientific_text_image(unicode, load_plot_font(34))
+                self.assertEqual(code.size, existing.size)
+                self.assertEqual(code.tobytes(), existing.tobytes())
+
+    def test_attached_subscript_and_superscript_share_position_and_use_smaller_font(self):
+        draw = ScientificDraw(Image.new('RGBA', (500, 100)))
+        layout = draw._layout('Fe_{x}^{3+}', load_plot_font(34))
+        base, sub, sup = layout[0]
+        self.assertEqual(sub[0], sup[0])
+        self.assertGreater(sub[1], base[1])
+        self.assertLess(sup[1], base[1])
+        self.assertLess(sub[3].size, base[3].size)
+        self.assertEqual(sub[3].size, sup[3].size)
+
+    def test_explicit_mathtext_scripts_match_unicode_and_preserve_plain_contents(self):
+        @arial_plot
+        def check():
+            parser = MathTextParser('path')
+            for code, unicode in [('CeZrO_{x}', 'CeZrOₓ'), ('m^{2}', 'm²'),
+                                  ('g^{-1}', 'g⁻¹')]:
+                self.assertEqual(scientific_mathtext(code), scientific_mathtext(unicode))
+            for label in ('Ce_{0.8}Zr_{0.2}O_{x}', 'Fe_{x}^{3+}', 'Rate_{active sites}',
+                          'Rate_{CO2}', 'r_{x^2}', 'CeO2_{x', 'CeO₂_{x}'):
+                parsed = parser.parse(scientific_mathtext(label), prop=FontProperties(size=12))
+                self.assertEqual({font.family_name for font, *_ in parsed.glyphs}, {plot_font_family()})
+            # Text inside a script is literal; a caret does not start nested math.
+            parsed = parser.parse(scientific_mathtext('r_{x^2}'))
+            self.assertEqual([chr(code) for _, _, code, *_ in parsed.glyphs], list('rx^2'))
+        check()
 
     def test_math_and_pillow_use_same_font_and_export_restores_global_settings(self):
         previous = dict(matplotlib.rcParams)

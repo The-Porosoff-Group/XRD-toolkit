@@ -166,7 +166,7 @@ class XrdPublicationExportTests(unittest.TestCase):
             self.assertIn("modeBarButtonsToRemove:['toImage']", html)
             self.assertIn('id="xrd-figure-title"', html)
             self.assertIn("fd.append('figure_title'", html)
-            self.assertIn('escHtml(figureTitle)', html)
+            self.assertIn('scientificLabelHtml(figureTitle)', html)
             self.assertIn("x:-0.012,y:rowCenter", html)
             self.assertIn("yanchor:'bottom'", html)
             self.assertIn('Light Publication Figure (PNG)', html)
@@ -193,6 +193,17 @@ class XrdPublicationExportTests(unittest.TestCase):
                 set_title.call_args.args[0],
                 'Tungsten carbide catalyst after reduction')
             self.assertEqual(set_title.call_args.kwargs['loc'], 'center')
+
+    def test_title_script_codes_work_in_custom_title_and_sample_fallback(self):
+        for metadata in ({'sample_id': 'sample_12', 'figure_title': 'CeZrO_{x}'},
+                         {'sample_id': 'CeZrO_{x}'}):
+            with self.subTest(metadata=metadata), tempfile.TemporaryDirectory() as directory:
+                original = dict(metadata)
+                with patch('matplotlib.axes.Axes.set_title') as set_title:
+                    make_xrd_plot(copy.deepcopy(publication_result()), metadata,
+                                  os.path.join(directory, 'title_codes.png'))
+                self.assertEqual(set_title.call_args.args[0], r'$\mathbf{CeZrO_{x}}$')
+                self.assertEqual(metadata, original)
 
     def test_workbook_filename_and_content_include_sample_date_and_hkl(self):
         metadata = {

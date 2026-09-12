@@ -772,7 +772,7 @@
                          onchange="document.getElementById('xrd-figure-title').disabled = !this.checked;">
                   Show figure title
                 </label>
-                <span style="font-size:11px;color:var(--muted);">Uncheck for no title on figures exported with the next fit.</span>
+                <span style="font-size:11px;color:var(--muted);">Uncheck for no title on figures exported with the next fit. Use <code>_{...}</code> for subscripts and <code>^{...}</code> for superscripts, e.g. <code>CeZrO_{x}</code> or <code>Fe^{3+}</code>. Include the braces; no dollar signs are needed.</span>
               </div>
               <div class="form-group">
                 <label for="xrd-size-reporting">Size reporting</label>
@@ -1315,6 +1315,12 @@ function escHtml(v) {
   return String(v ?? '').replace(/[&<>"']/g, ch => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[ch]));
+}
+function scientificLabelHtml(value) {
+  return escHtml(value).replace(/([_^])\{([^{}\r\n]+)\}/g, (_, marker, content) => {
+    const tag = marker === '_' ? 'sub' : 'sup';
+    return `<${tag}>${content}</${tag}>`;
+  });
 }
 
 function openXrdFittingGuide() {
@@ -3717,7 +3723,7 @@ function renderXrdPublicationPlot(data) {
       paper_bgcolor:palette.paper, plot_bgcolor:palette.plot,
       font:{color:palette.text,size:12,family:'Arial, sans-serif'},
       margin:{l:110,r:22,t:showFigureTitle ? 70 : 20,b:58},
-      title:showFigureTitle ? {text:`<b>${escHtml(figureTitle)}</b><br><span style="font-size:11px">${statsTitle}</span>`,
+      title:showFigureTitle ? {text:`<b>${scientificLabelHtml(figureTitle)}</b><br><span style="font-size:11px">${statsTitle}</span>`,
              x:0.5,xanchor:'center',font:{size:17}} : undefined,
       xaxis:{gridcolor:palette.grid,zeroline:false,tickfont:{size:12}},
       yaxis:{title:{text:'Intensity (arbitrary units)',font:{size:14}},
