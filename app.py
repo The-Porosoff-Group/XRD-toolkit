@@ -170,6 +170,7 @@ from xrd.cod_api   import (search_by_elements  as cod_search_elements,
                             search_by_name      as cod_search_name,
                             fetch_cif           as cod_fetch_cif,
                             get_stick_pattern,  SORT_OPTIONS)
+from xrd.presentation import export_file_prefix
 
 # Initialise cache with config settings
 _cache = get_cache(cache_dir=CACHE_DIR, max_size_mb=CACHE_MAX_MB)
@@ -1147,6 +1148,14 @@ def process_xrd():
         tt_min     = float(form.get('tt_min', 5.0))
         tt_max     = float(form.get('tt_max', 90.0))
         sample_id  = form.get('sample_id', 'Sample')
+        figure_title = form.get('figure_title', '').strip()
+        show_figure_title = form.get('show_figure_title', 'true').lower() == 'true'
+        from modules.xrd.size_reporting import size_reporting_settings
+        try:
+            size_reporting = size_reporting_settings(
+                form.get('size_reporting_mode', 'both'), form.get('scherrer_k', '0.9'))
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
         notes      = form.get('notes', '')
         wl_label   = form.get('wavelength_label', f'λ={wavelength:.5f} Å')
 
@@ -1190,8 +1199,12 @@ def process_xrd():
         if not output_base or not os.path.isdir(output_base):
             output_base = os.path.join(BASE_DIR, 'results')
         ts      = datetime.now().strftime('%Y%m%d_%H%M%S')
-        safe_id = re.sub(r'[^\w\-]', '_', sample_id)
+        safe_id = re.sub(r'[^\w\-]', '_', os.path.splitext(sample_id)[0])
         out_dir = os.path.join(output_base, f'XRD_{safe_id}_{ts}')
+        analysis_date = datetime.now().strftime('%Y-%m-%d')
+        plot_theme = form.get('plot_theme', 'light').strip().lower()
+        if plot_theme not in ('light', 'dark'):
+            plot_theme = 'light'
 
         # ── Calibration mode: separate backend ──────────────────────────
         calibration_mode = form.get('calibration_mode', '').lower() == 'true'
@@ -1258,6 +1271,7 @@ def process_xrd():
 
             # Compute Si tick positions for the plot
             _cal_ticks = []
+            _cal_tick_reflections = []
             try:
                 from modules.xrd.crystallography import generate_reflections
                 _cal_ticks_raw = generate_reflections(
@@ -1267,6 +1281,10 @@ def process_xrd():
                     'cubic', cal_phase.get('spacegroup_number', 227),
                     wavelength, tt_min, tt_max, hkl_max=12)
                 _cal_ticks = [r[0] for r in _cal_ticks_raw]
+                _cal_tick_reflections = [{
+                    'two_theta': round(float(reflection[0]), 3),
+                    'hkl': list(reflection[2]),
+                } for reflection in _cal_ticks_raw]
             except Exception as _te:
                 print(f"  Warning: tick positions: {_te}", flush=True)
 
@@ -1285,25 +1303,45 @@ def process_xrd():
                 'statistics': cal_result['statistics'],
                 'phase_results': [{
                     'name': cal_phase.get('name', 'Standard'),
+                    'formula': cal_phase.get('formula', ''),
+                    'system': cal_phase.get('system', 'cubic'),
+                    'spacegroup_number': cal_phase.get('spacegroup_number', 227),
                     'spacegroup': cal_phase.get('spacegroup', 'Fd-3m'),
                     'weight_fraction_%': 100.0,
                     'tick_positions': _cal_ticks,
+                    'tick_reflections': _cal_tick_reflections,
                 }],
                 'phase_patterns': [_phase_only],
                 'wavelength': wavelength,
             }
-            plot_path = os.path.join(out_dir, 'xrd_calibration.png')
-            make_xrd_plot(plot_result, {
+            cal_metadata = {
                 'sample_id': sample_id,
+                'figure_title': figure_title,
+                'show_figure_title': show_figure_title,
                 'wavelength_label': wl_label,
                 'method': 'GSAS-II Calibration',
-            }, plot_path)
+                'analysis_date': analysis_date,
+            }
+            cal_prefix = export_file_prefix(cal_metadata)
+            plot_paths = {}
+            for theme_name in ('light', 'dark'):
+                themed_path = os.path.join(
+                    out_dir,
+                    f'{cal_prefix}_xrd_calibration_{theme_name}.png')
+                make_xrd_plot(
+                    plot_result, cal_metadata, themed_path,
+                    theme=theme_name)
+                plot_paths[theme_name] = themed_path
+            plot_path = plot_paths[plot_theme]
 
             with open(plot_path, 'rb') as img:
                 plot_b64 = base64.b64encode(img.read()).decode()
 
             return jsonify({
                 'plot_b64':      plot_b64,
+                'plot_path':     plot_path,
+                'plot_paths':    plot_paths,
+                'plot_theme':    plot_theme,
                 'statistics':    cal_result['statistics'],
                 'phase_results': [{
                     'name': cal_phase.get('name', 'Standard'),
@@ -1345,7 +1383,14 @@ def process_xrd():
         result = xrd_processor.run(
             filepath   = upload_path,
             output_dir = out_dir,
-            metadata   = {'sample_id': sample_id, 'notes': notes},
+            metadata   = {
+                'sample_id': sample_id,
+                'figure_title': figure_title,
+                'show_figure_title': show_figure_title,
+                'notes': notes,
+                'analysis_date': analysis_date,
+                'source_file': f.filename,
+            },
             params     = {
                 'phases':           phases,
                 'wavelength':       wavelength,
@@ -1355,6 +1400,9 @@ def process_xrd():
                 'n_bg_coeffs':      form.get('n_bg_coeffs', 'auto'),
                 'max_outer':        MAX_OUTER,
                 'method':           form.get('method', 'lebail'),
+                'plot_theme':       plot_theme,
+                'size_reporting_mode': size_reporting['mode'],
+                'scherrer_k': size_reporting['scherrer_k'],
                 'instprm_file':     instprm_file_path,
                 'instrument':       form.get('instrument', 'auto'),
                 # Verification mode (GSAS-II only): skip cell/Uiso/size
@@ -1383,12 +1431,8 @@ def process_xrd():
                 # Stage 6 refine the MD ratio alongside cell.
                 'verify_refine_po':
                     form.get('verify_refine_po', '').lower() == 'true',
-                # Swap position handle: refine Zero, fix DisplaceX/Y at 0.
-                # Use when DisplaceY refuses to move from 0 because the
-                # offset is actually a Zero miscalibration (the measured
-                # instprm's Zero may not transfer cleanly to a different
-                # sample mounting).  Overrides the measured-instprm rule
-                # that locks Zero.
+                # Diagnostic alternative: refine Zero and fix all sample
+                # displacement terms, including Bragg-Brentano Shift.
                 'verify_use_zero_not_displace':
                     form.get('verify_use_zero_not_displace', '').lower() == 'true',
                 # Branch B: post-Stage-6 enforce uniform cell scaling on
@@ -1447,8 +1491,7 @@ def process_xrd():
                     form.get('verify_refine_w2c_mustrain', '').lower() == 'true',
                 # Generic per-phase refinement options.  JSON-serialized
                 # list of dicts (one per phase, by index) with keys
-                # refine_cell, refine_uiso, refine_size, refine_mustrain,
-                # po_mode, po_value, po_axis.
+                # refine_size, refine_mustrain, po_mode, po_value, po_axis.
                 # Frontend builds this from the per-phase control cards.
                 'phase_options':
                     (lambda _raw: (
@@ -1466,8 +1509,12 @@ def process_xrd():
         print("=== /api/process_xrd DONE ===", flush=True)
         return jsonify({
             'plot_b64':      plot_b64,
+            'plot_path':     result['plot_path'],
+            'plot_paths':    result.get('plot_paths', {}),
+            'plot_theme':    result.get('plot_theme', plot_theme),
             'statistics':    result['statistics'],
             'phase_results': result['phase_results'],
+            'size_reporting': result.get('size_reporting'),
             'zero_shift':    result['zero_shift'],
             'displacement_um':    result.get('displacement_um'),
             'displacement_param': result.get('displacement_param'),

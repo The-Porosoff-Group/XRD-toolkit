@@ -6,6 +6,15 @@ XRD module — entry point, file parsers, run() called by app.py.
 import os, re, math
 import numpy as np
 
+from .size_reporting import apply_size_reporting, size_reporting_settings
+
+from .presentation import (
+    enrich_phase_results,
+    export_file_prefix,
+    phase_display_label,
+    reflection_labels_for_phase,
+)
+
 MODULE_INFO = {
     'name':        'XRD',
     'description': 'Le Bail profile fitting with COD phase identification',
@@ -494,13 +503,38 @@ def _write_summary_xlsx(result, metadata, method_label, output_dir):
     """
     import pandas as pd
 
+    enrich_phase_results(result)
     phases = result['phase_results']
     stats  = result['statistics']
+    reporting = result.get('size_reporting', size_reporting_settings())
+    apply_size_reporting(result, reporting['mode'], reporting['scherrer_k'])
+    size_rows = [('size_reporting_mode', 'Size reporting')]
+    if reporting['mode'] in ('hap', 'both'):
+        size_rows.append(('gsas_hap_size_nm', 'GSAS HAP size (nm; K=1)'))
+    if reporting['mode'] in ('scherrer', 'both'):
+        size_rows.extend([
+            ('scherrer_equivalent_size_nm', 'Scherrer-equivalent size (nm)'),
+            ('scherrer_k', 'Scherrer shape factor K'),
+        ])
+    if any(ph.get('crystallite_size_source') != 'gsas_hap_size'
+           and ph.get('crystallite_size_nm') is not None for ph in phases):
+        size_rows.append(('other_size_estimate_nm', 'Other size estimate (nm; unconverted)'))
+        for ph in phases:
+            ph['other_size_estimate_nm'] = (ph.get('crystallite_size_nm')
+                if ph.get('crystallite_size_source') != 'gsas_hap_size' else None)
+    size_rows.extend([
+        ('crystallite_size_source', 'Native size source'),
+        ('size_reporting_note', 'Size reporting method'),
+    ])
 
     # ── Sheet 1: Transposed summary ──────────────────────────────────────
     # Define the parameters we want to show (order matters)
     param_keys = [
         ('sample',             'Sample'),
+        ('figure_title',       'Figure title'),
+        ('show_figure_title',  'Show figure title'),
+        ('analysis_date',      'Analysis date'),
+        ('source_file',        'Source data file'),
         ('method',             'Method'),
         ('name',               'Phase name'),
         ('cod_id',             'COD / MP ID'),
@@ -534,8 +568,7 @@ def _write_summary_xlsx(result, metadata, method_label, output_dir):
         ('integrated_phase_fraction_%', 'Integrated phase fraction (%)'),
         ('integrated_minus_weight_fraction_pp', 'Integrated - wt fraction (percentage points)'),
         ('integrated_phase_fraction_method', 'Integrated phase fraction method'),
-        ('crystallite_size_nm',    'Crystallite size (nm)'),
-        ('crystallite_size_source', 'Crystallite size source'),
+        *size_rows,
         ('microstrain_microstrain', 'Microstrain (microstrain)'),
         ('microstrain_source', 'Microstrain source'),
         ('scale',              'Scale factor'),
@@ -568,7 +601,7 @@ def _write_summary_xlsx(result, metadata, method_label, output_dir):
     col_names = []
     seen_names = {}
     for i, ph in enumerate(phases):
-        base = ph.get('name', f'Phase {i+1}')
+        base = ph.get('display_label') or phase_display_label(ph, index=i)
         if base in seen_names:
             seen_names[base] += 1
             col_names.append(f"{base} ({ph.get('spacegroup', seen_names[base])})")
@@ -577,7 +610,7 @@ def _write_summary_xlsx(result, metadata, method_label, output_dir):
             col_names.append(base)
     # If all ended up the same, append index
     if len(set(col_names)) < len(col_names):
-        col_names = [f"{ph.get('name', f'Phase {i+1}')} #{i+1}"
+        col_names = [f"{phase_display_label(ph, index=i)} (phase {i+1})"
                      for i, ph in enumerate(phases)]
 
     rows_data = []
@@ -586,6 +619,15 @@ def _write_summary_xlsx(result, metadata, method_label, output_dir):
         for i, ph in enumerate(phases):
             if key == 'sample':
                 row[col_names[i]] = metadata.get('sample_id', '')
+            elif key == 'figure_title':
+                row[col_names[i]] = metadata.get('figure_title', '')
+            elif key == 'show_figure_title':
+                row[col_names[i]] = metadata.get('show_figure_title', True)
+            elif key == 'analysis_date':
+                row[col_names[i]] = metadata.get(
+                    'analysis_date', metadata.get('output_date', ''))
+            elif key == 'source_file':
+                row[col_names[i]] = metadata.get('source_file', '')
             elif key == 'method':
                 row[col_names[i]] = method_label
             else:
@@ -620,7 +662,7 @@ def _write_summary_xlsx(result, metadata, method_label, output_dir):
     # Per-phase component curves (trim/pad to match length)
     phase_patterns = result.get('phase_patterns', [])
     for i, ph in enumerate(phases):
-        col = ph.get('name', f'Phase {i+1}')
+        col = ph.get('display_label') or phase_display_label(ph, index=i)
         if i < len(phase_patterns):
             pp = list(phase_patterns[i])
             # Ensure same length as tt
@@ -630,66 +672,25 @@ def _write_summary_xlsx(result, metadata, method_label, output_dir):
 
     df_plot = pd.DataFrame(plot_dict)
 
-    # Per-phase reflection positions with Miller indices
-    # Use the already-filtered tick_positions from the refinement result,
-    # and cross-reference with generate_reflections for hkl labels.
-    from .crystallography import generate_reflections, parse_cif
-
+    # Per-phase reflection positions with Miller indices.  The same
+    # post-fit metadata feeds the figure and workbook, so their labels cannot
+    # drift apart.
     wavelength = result.get('wavelength', 1.54056)
     tt_min = min(tt) if tt else 5.0
     tt_max = max(tt) if tt else 90.0
 
     phase_ref_data = []
     for ph in phases:
-        refs = []
-        # Get the filtered tick positions from the refinement result
-        filtered_ticks = set(ph.get('tick_positions', []))
-        try:
-            sys_ = (ph.get('system') or 'triclinic').lower()
-            sg   = ph.get('spacegroup_number', 1)
-            sites = None
-            cif_text = ph.get('cif_text', '')
-            if cif_text:
-                try:
-                    parsed = parse_cif(cif_text)
-                    sites = parsed.get('sites') or None
-                except Exception:
-                    pass
-            # Determine site policy using the same logic as the backend
-            from .gsasii_backend import _cif_policy
-            _policy = _cif_policy(ph)
-            _sp = ('legacy_direct_sites' if _policy == 'mp_w2c_pbcn_compat'
-                   else 'auto')
-            ref_list = generate_reflections(
-                ph.get('a', 1), ph.get('b', 1), ph.get('c', 1),
-                ph.get('alpha', 90), ph.get('beta', 90), ph.get('gamma', 90),
-                sys_, sg, wavelength, tt_min, tt_max, hkl_max=12,
-                sites=sites, site_policy=_sp)
-            if filtered_ticks:
-                # Only include reflections whose 2θ is near a filtered tick.
-                # Use tolerance (0.01°) instead of exact match to avoid
-                # rounding mismatches between GSAS-II refined cell params
-                # and the rounded values stored in phase_results.
-                sorted_ticks = sorted(filtered_ticks)
-                for r in ref_list:
-                    tt_r = round(r[0], 3)
-                    matched = any(abs(tt_r - t) < 0.01 for t in sorted_ticks)
-                    if matched:
-                        h, k, l = r[2]
-                        refs.append((tt_r, f'[{h}{k}{l}]'))
-            else:
-                # No filtered ticks available — use all from generate_reflections
-                for r in ref_list:
-                    h, k, l = r[2]
-                    refs.append((round(r[0], 3), f'[{h}{k}{l}]'))
-        except Exception:
-            pass
-        phase_ref_data.append(refs)
+        reflections = reflection_labels_for_phase(
+            ph, wavelength, tt_min, tt_max)
+        phase_ref_data.append([
+            (reflection['two_theta'], reflection['label'])
+            for reflection in reflections
+        ])
 
     # Append reflection columns to plot dataframe (separate column block per phase)
-    max_refs = max((len(r) for r in phase_ref_data), default=0)
     for i, ph in enumerate(phases):
-        pname = ph.get('name', f'Phase {i+1}')
+        pname = ph.get('display_label') or phase_display_label(ph, index=i)
         tt_col = f'{pname} peak 2θ'
         hkl_col = f'{pname} [hkl]'
         refs = phase_ref_data[i] if i < len(phase_ref_data) else []
@@ -702,10 +703,28 @@ def _write_summary_xlsx(result, metadata, method_label, output_dir):
     # ── Write xlsx (fall back to CSV if openpyxl not installed) ─────────
     try:
         import openpyxl  # noqa: F401 – just check availability
-        xlsx_path = os.path.join(output_dir, 'xrd_summary.xlsx')
+        prefix = export_file_prefix(metadata)
+        xlsx_path = os.path.join(
+            output_dir, f'{prefix}_xrd_refinement_results.xlsx')
         with pd.ExcelWriter(xlsx_path, engine='openpyxl') as writer:
             df_summary.to_excel(writer, sheet_name='Summary', index=False)
             df_plot.to_excel(writer, sheet_name='Plot Data', index=False)
+            for worksheet in writer.book.worksheets:
+                worksheet.freeze_panes = 'B2' if worksheet.title == 'Summary' else 'A2'
+                worksheet.sheet_view.showGridLines = False
+                worksheet.auto_filter.ref = worksheet.dimensions
+                for cell in worksheet[1]:
+                    cell.font = openpyxl.styles.Font(bold=True, color='FFFFFF')
+                    cell.fill = openpyxl.styles.PatternFill(
+                        'solid', fgColor='1F4E78')
+                    cell.alignment = openpyxl.styles.Alignment(
+                        horizontal='center', vertical='center', wrap_text=True)
+                worksheet.row_dimensions[1].height = 30
+                for column_cells in worksheet.columns:
+                    values = [str(cell.value or '') for cell in column_cells[:80]]
+                    width = min(max(max((len(value) for value in values), default=8) + 2, 12), 38)
+                    worksheet.column_dimensions[
+                        column_cells[0].column_letter].width = width
         return xlsx_path
     except ImportError:
         pass
@@ -714,9 +733,12 @@ def _write_summary_xlsx(result, metadata, method_label, output_dir):
         warnings.warn(f"xlsx write failed ({exc}), falling back to CSV")
 
     # openpyxl not available or write failed — write two CSV files
-    summary_csv = os.path.join(output_dir, 'xrd_summary.csv')
+    prefix = export_file_prefix(metadata)
+    summary_csv = os.path.join(
+        output_dir, f'{prefix}_xrd_refinement_summary.csv')
     df_summary.to_csv(summary_csv, index=False)
-    plot_csv = os.path.join(output_dir, 'xrd_plot_data.csv')
+    plot_csv = os.path.join(
+        output_dir, f'{prefix}_xrd_refinement_plot_data.csv')
     df_plot.to_csv(plot_csv, index=False)
     return summary_csv
 
@@ -741,6 +763,9 @@ def run(filepath, output_dir, metadata, params):
     from .xrd_plots import make_xrd_plot
 
     os.makedirs(output_dir, exist_ok=True)
+
+    reporting = size_reporting_settings(
+        params.get('size_reporting_mode', 'both'), params.get('scherrer_k', 0.9))
 
     # Validate phases
     phases = validate_phases(params.get('phases', []))
@@ -944,26 +969,46 @@ def run(filepath, output_dir, metadata, params):
             n_bg_coeffs=n_bg, max_outer=max_outer,
         )
 
-    # Plot
+    # Display/export metadata is added only after the fit is complete.
+    apply_size_reporting(result, reporting['mode'], reporting['scherrer_k'])
+    enrich_phase_results(result)
+
+    # Produce both publication themes from the identical completed result.
     method_label = {'rietveld': 'Rietveld', 'gsas2': 'GSAS-II',
                     }.get(method, 'Le Bail')
-    plot_path = os.path.join(output_dir, 'xrd_refinement.png')
-    make_xrd_plot(result, {
+    prefix = export_file_prefix(metadata)
+    requested_theme = str(params.get('plot_theme', 'light')).lower()
+    if requested_theme not in ('light', 'dark'):
+        requested_theme = 'light'
+    plot_metadata = {
         'sample_id':       metadata.get('sample_id', 'Sample'),
+        'figure_title':    metadata.get('figure_title', ''),
+        'show_figure_title': metadata.get('show_figure_title', True),
         'wavelength_label': params.get('wavelength_label',
                                         f"λ={wavelength:.5f} Å"),
         'method':           method_label,
-    }, plot_path)
+    }
+    plot_paths = {}
+    for plot_theme in ('light', 'dark'):
+        themed_path = os.path.join(
+            output_dir,
+            f'{prefix}_xrd_refinement_{plot_theme}.png')
+        make_xrd_plot(
+            result, plot_metadata, themed_path, theme=plot_theme)
+        plot_paths[plot_theme] = themed_path
+    plot_path = plot_paths[requested_theme]
 
     # Summary Excel (two sheets: transposed summary + plot data with peaks)
-    import pandas as pd
     summary_path = _write_summary_xlsx(result, metadata, method_label, output_dir)
 
     return {
         'plot_path':    plot_path,
+        'plot_paths':   plot_paths,
+        'plot_theme':   requested_theme,
         'summary_path': summary_path,
         'statistics':   result['statistics'],
         'phase_results': result['phase_results'],
+        'size_reporting': result.get('size_reporting'),
         'zero_shift':   result['zero_shift'],
         'displacement_um':    result.get('displacement_um'),
         'displacement_param': result.get('displacement_param'),

@@ -40,6 +40,9 @@ The first launch creates a local Python environment and installs dependencies. G
 - `.instprm` instrument parameter support
 - Built-in WC/W2C Synergy-S production preset
 - Saved user presets
+- GSAS HAP, Scherrer-equivalent, or combined size reporting with an explicit K
+- Light/dark figure exports with an optional title; single-phase legends omit
+  the normalized weight percentage
 - Per-phase controls for:
   - unit-cell refinement
   - crystallite size
@@ -51,6 +54,12 @@ The first launch creates a local Python environment and installs dependencies. G
   percentages relative to the exact prepared GSAS CIF
 
 ## Recommended Workflow
+
+Raw scans, generated results, and `xrd_refinement_presets.json` are local user
+files and are excluded from Git. Keep measurements in `data/` or `uploads/`
+and fit outputs in `results/`. Canonical `fixtures/` and the two bundled
+instrument reference profiles remain versioned. Ignore rules do not remove
+files from older Git commits.
 
 1. Upload the measured XRD pattern.
 2. Set wavelength and 2-theta range.

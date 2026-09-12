@@ -260,6 +260,34 @@ def _filter_tick_positions(refs, I_hkl, threshold_frac=1e-3):
     return ticks
 
 
+def _filter_tick_reflections(refs, I_hkl, threshold_frac=1e-3):
+    """Display metadata companion to :func:`_filter_tick_positions`.
+
+    The same intensity threshold is used, but the Miller indices are retained
+    so plots and workbooks can label the exact ticks selected by the completed
+    fit.  This function has no role in optimization.
+    """
+    if len(refs) == 0:
+        return []
+    max_intensity = max(I_hkl) if len(I_hkl) > 0 else 0
+    threshold = max_intensity * threshold_frac if max_intensity > 0 else 0
+    reflections = []
+    for index, ref in enumerate(refs):
+        if index >= len(I_hkl) or I_hkl[index] <= threshold:
+            continue
+        if isinstance(ref, dict):
+            position = ref['two_theta']
+            hkl = ref.get('hkl', [])
+        else:
+            position = ref[0]
+            hkl = ref[2] if len(ref) > 2 else []
+        reflections.append({
+            'two_theta': round(float(position), 3),
+            'hkl': list(hkl),
+        })
+    return reflections
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN REFINEMENT
 # ─────────────────────────────────────────────────────────────────────────────
@@ -738,6 +766,8 @@ def run_lebail(tt, y_obs, sigma, phases, wavelength,
         else:
             _display_r = _base_r
 
+        tick_reflections = _filter_tick_reflections(
+            st['refs'], st['I_hkl'])
         phase_results.append({
             'name':              _display_r,
             'cod_id':            ph.get('cod_id', ''),
@@ -757,7 +787,9 @@ def run_lebail(tt, y_obs, sigma, phases, wavelength,
             'crystallite_size_nm': round(cryst_A/10, 2) if cryst_A else None,
             'weight_fraction_%':   round(wt_frac, 1),
             'n_reflections':       len(st['refs']),
-            'tick_positions':      _filter_tick_positions(st['refs'], st['I_hkl']),
+            'tick_positions':      [
+                reflection['two_theta'] for reflection in tick_reflections],
+            'tick_reflections':    tick_reflections,
             'seeded_by':           st.get('seeded', 'unknown'),
         })
 
@@ -1224,6 +1256,7 @@ def run_rietveld(tt, y_obs, sigma, phases, wavelength,
         else:
             _display_rv = _base_rv
 
+        tick_reflections = _filter_tick_reflections(st['refs'], I_hkl)
         phase_results.append({
             'name':              _display_rv,
             'cod_id':            ph.get('cod_id', ''),
@@ -1244,7 +1277,9 @@ def run_rietveld(tt, y_obs, sigma, phases, wavelength,
             'crystallite_size_nm': round(cryst_A/10, 2) if cryst_A else None,
             'weight_fraction_%':   round(wt_frac, 1),
             'n_reflections':       len(st['refs']),
-            'tick_positions':      _filter_tick_positions(st['refs'], I_hkl),
+            'tick_positions':      [
+                reflection['two_theta'] for reflection in tick_reflections],
+            'tick_reflections':    tick_reflections,
             'seeded_by':           'rietveld',
         })
 

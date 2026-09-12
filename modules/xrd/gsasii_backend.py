@@ -236,7 +236,7 @@ INSTRUMENT_PROFILES = {
     'smartlab': {
         'label':    'Rigaku SmartLab flat plate / Bragg-Brentano',
         'geometry': 'bragg_brentano',
-        'displacement_param': 'DisplaceX',
+        'displacement_param': 'Shift',
         'zero_seed': -0.027,   # measured from NIST Si 640g
         'polariz':  0.7,       # SmartLab manual calibration profile
         'sh_l':     0.002,     # SmartLab manual calibration profile
@@ -253,6 +253,11 @@ INSTRUMENT_PROFILES = {
     },
 }
 DEFAULT_INSTRUMENT = 'smartlab'
+
+
+def _sample_displacement_parameter(geometry):
+    """GSAS-II uses Shift (microns) for Bragg-Brentano sample height."""
+    return 'Shift' if geometry == 'bragg_brentano' else 'DisplaceY'
 
 # Legacy defaults — kept for backward compat and as fallback values.
 # When an instrument profile is active, these are overridden by profile
@@ -1445,6 +1450,43 @@ def _write_xye(path, tt, y_obs, sigma):
             f.write(f"{tt[i]:.6f}  {y_obs[i]:.4f}  {sigma[i]:.4f}\n")
 
 
+def _estimate_size_seed_um(tt, y_obs, wavelength):
+    """Seed HAP Size from prominent observed widths, in GSAS-II microns.
+
+    This is only an optimizer starting value, not an instrument-corrected
+    size measurement. A narrow 1-micron default can lose broad sample peaks
+    before size refinement opens, letting background and zero shift drift.
+    """
+    from scipy.signal import find_peaks, peak_widths
+
+    tt = np.asarray(tt, dtype=float)
+    y_obs = np.asarray(y_obs, dtype=float)
+    if (len(tt) < 5 or len(tt) != len(y_obs)
+            or not np.all(np.isfinite(tt))
+            or not np.all(np.isfinite(y_obs))
+            or np.any(np.diff(tt) <= 0)):
+        return 1.0
+    span = float(np.ptp(y_obs))
+    if span <= 0 or not np.isfinite(wavelength) or wavelength <= 0:
+        return 1.0
+    peaks, props = find_peaks(y_obs, prominence=0.1 * span,
+                             distance=max(1, int(0.5 / np.median(np.diff(tt)))))
+    if not len(peaks):
+        return 1.0
+    peaks = peaks[np.argsort(props['prominences'])[-8:]]
+    _, _, left, right = peak_widths(y_obs, peaks, rel_height=0.5)
+    indices = np.arange(len(tt))
+    widths = np.interp(right, indices, tt) - np.interp(left, indices, tt)
+    beta_cos = np.radians(widths) * np.cos(np.radians(tt[peaks] / 2.0))
+    valid = (widths > 0) & (beta_cos > 0) & np.isfinite(beta_cos)
+    if not np.any(valid):
+        return 1.0
+    # GSAS-II CW size gamma = 1.8*lambda/(pi*D_um*cos(theta)),
+    # in centidegrees, equivalent to K=1 in the Scherrer expression.
+    return float(np.clip(wavelength / (10000.0 * np.median(beta_cos[valid])),
+                         0.001, 1.0))
+
+
 def _estimate_profile_params(tt, y_obs):
     """Estimate initial Caglioti U, V, W from observed peak widths.
 
@@ -1786,12 +1828,13 @@ def _extract_profile_params(phase_obj):
     Returns dict with crystallite size and microstrain.
 
     GSAS-II Size data structure (isotropic):
-      Size = ['isotropic', [size_value, refine_flag], ...]
+      Size = ['isotropic', [size_value, axial_value, LGmix],
+              [refine_size, refine_axial, refine_LGmix], ...]
     where size_value is in MICRONS (µm), NOT Angstroms.
     Convert: size_A = size_um * 10000
 
     Mustrain data structure (isotropic):
-      Mustrain = ['isotropic', [strain_value, refine_flag], ...]
+      Mustrain uses the same separate value and refinement-flag lists.
     where strain_value is in units of 10^-6 (micro-strain).
     """
     try:
@@ -1801,7 +1844,10 @@ def _extract_profile_params(phase_obj):
         strain_data = hapData.get('Mustrain', [])
 
         cryst_size_A = None
-        if size_data and len(size_data) > 1:
+        # A positive Size alone is not evidence of refinement: GSAS-II
+        # initializes it to 1 micron even when its refinement flag is off.
+        if (len(size_data) > 2 and size_data[0] == 'isotropic'
+                and size_data[2][0]):
             size_val = float(size_data[1][0]) if size_data[1][0] > 0 else None
             if size_val is not None and size_val > 0:
                 # GSAS-II stores Size in µm; convert to Å (×10000)
@@ -1823,6 +1869,10 @@ def _extract_profile_params(phase_obj):
 
         return {
             'crystallite_size_A': cryst_size_A,
+            'gsas_size_model': size_data[0] if size_data else None,
+            'gsas_size_lg_mix': (
+                float(size_data[1][2])
+                if len(size_data) > 1 and len(size_data[1]) > 2 else None),
             'microstrain_pct': microstrain,
         }
     except Exception:
@@ -2011,7 +2061,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         Supported keys:
           geometry : str — "capillary" (default) or "bragg_brentano".
               Controls which displacement correction is refined:
-              capillary → DisplaceY, bragg_brentano → DisplaceX.
+              capillary → DisplaceY, bragg_brentano → Shift.
           preferred_orientation : str — "auto" (default), "off", or
               "force".  "auto" enables March-Dollase for hexagonal/
               trigonal phases only.  "off" disables for all.  "force"
@@ -2093,16 +2143,12 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             preferred_orientation = 'auto'
             print(f"  PO override: preferred_orientation forced to 'auto' "
                   f"because verify_refine_po=True.", flush=True)
-    # Swap position-handle: free Zero, fix DisplaceX/Y at zero.  Use when
-    # the offset is a real diffractometer/wavelength miscalibration that
-    # the measured-instprm Zero cannot capture for this sample (e.g. when
-    # DisplaceY refuses to move from 0 because the position residual
-    # belongs to Zero, not to sample displacement).  Overrides the
-    # measured-instprm rule that locks Zero.
+    # Diagnostic alternative to sample displacement: free Zero and hold
+    # every sample position correction at zero. Do not refine both.
     use_zero_not_displace_opt = bool(
         options.get('verify_use_zero_not_displace', False))
     if use_zero_not_displace_opt:
-        print(f"  Position handle: refining Zero, fixing DisplaceX/Y = 0 "
+        print(f"  Position handle: refining Zero, fixing sample displacement = 0 "
               f"(verify_use_zero_not_displace=True).", flush=True)
     # Constrain W2C cell to uniform-volume scaling (Branch B).
     # Stage 6 refines (a, b, c) freely; afterward, post-process W2C
@@ -2118,15 +2164,15 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         print(f"  Cell constraint: W2C will be post-scaled to uniform "
               f"contraction after Stage 6 "
               f"(verify_cell_uniform_w2c=True).", flush=True)
-    # Diagnostic: free Lorentzian strain X in Stage 2 and Stage 6.
+    # Diagnostic: free the GSAS-II Lorentzian X/cos(theta) width term.
     # Normally X is pinned to the measured-instprm value (Si standard
     # has X = 0).  When this is True, X is added to the refine list
     # alongside Y (and Zero, if zero-swap is also on).  Use to test
-    # whether residual Lorentzian peak shape needs strain-like broadening.
+    # whether residual peak shape needs additional size-like broadening.
     refine_x_opt = bool(options.get('verify_refine_x', False))
     if refine_x_opt:
-        print(f"  Diagnostic: X (Lorentzian strain) will refine in "
-              f"Stages 2 and 6 (verify_refine_x=True).", flush=True)
+        print("  Diagnostic: Free X requested for Stages 2 and 6 "
+              "unless per-phase Size is active.", flush=True)
     # Y controls — orthogonal to X and Zero handles.  Fix-Y dominates
     # refine-Y when both are set.  Non-negative constraint applies
     # post-Stage-6 only when Y refines.
@@ -2562,6 +2608,18 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             data_path, instprm_path,
             databank=None,
         )
+
+        # GSAS-II selects position equations from the histogram geometry.
+        # DisplaceX/Y are ignored in Bragg-Brentano mode; sample height is
+        # named Shift there. Clear inactive flags before opening one handle.
+        _sample_params = histogram.data['Sample Parameters']
+        _sample_params['Type'] = ('Bragg-Brentano'
+                                  if geometry == 'bragg_brentano'
+                                  else 'Debye-Scherrer')
+        for _position_key in ('Shift', 'DisplaceX', 'DisplaceY'):
+            _position_entry = _sample_params.get(_position_key)
+            if isinstance(_position_entry, list) and len(_position_entry) >= 2:
+                _position_entry[1] = False
 
         # Set data range
         histogram.data['Limits'] = [[tt_min, tt_max], [tt_min, tt_max]]
@@ -3004,6 +3062,22 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         elif n_bg_coeffs < n_existing_coeffs:
             bkg_data[0] = existing[:3 + n_bg_coeffs]
 
+        # Give explicitly requested Size phases realistic widths before any
+        # scale/background/position fit. Keep size fixed for the scale-only
+        # pass; with a measured profile it will open alongside Stage 2.
+        _size_seed_um = _estimate_size_seed_um(tt_r, y_r, wavelength)
+        _early_size_phases = []
+        for idx, phase_obj in enumerate(gsas_phases):
+            _popts = _phase_opts_for(idx, getattr(phase_obj, 'name', ''))
+            if not (refine_size_opt or _popts.get('refine_size')):
+                continue
+            phase_obj.set_HAP_refinements({'Size': {
+                'type': 'isotropic', 'value': _size_seed_um, 'refine': False}})
+            _early_size_phases.append(phase_obj)
+            print(f"  Phase {idx}: Size starting guess = "
+                  f"{_size_seed_um * 1000:.2f} nm from observed widths "
+                  "(initialization only).", flush=True)
+
         if progress_callback:
             progress_callback('GSAS-II: stage 1 — refining background + scale...')
 
@@ -3083,6 +3157,11 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                 print(f"  Phase {idx} scale after re-refinement: "
                       f"{hapData['Scale'][0]:.4e}", flush=True)
 
+        if _measured_instprm:
+            for phase_obj in _early_size_phases:
+                phase_obj.set_HAP_refinements(
+                    {'Size': {'type': 'isotropic', 'refine': True}})
+
         if progress_callback:
             progress_callback('GSAS-II: stage 2 — refining profile parameters...')
 
@@ -3093,11 +3172,10 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         # Profile parameter selection for lab XRD stability:
         #   Refined: U, W (Gaussian Caglioti), X, Y (Lorentzian), Zero,
         #            Displacement (geometry-dependent: DisplaceY for
-        #            capillary/transmission, DisplaceX for Bragg-Brentano)
+        #            capillary/transmission, Shift for Bragg-Brentano)
         #   Fixed:   V (99%+ correlated with U and W — instrument-determined)
         #            SH/L (instrument constant, 99.9% correlated with Zero)
-        _displace_stg2 = ('DisplaceX' if geometry == 'bragg_brentano'
-                          else 'DisplaceY')
+        _displace_stg2 = _sample_displacement_parameter(geometry)
         _any_hap_size_requested = bool(
             refine_size_opt or any(
                 _phase_opts_for(
@@ -3118,9 +3196,9 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         # Size/Mustrain to capture.
         if _measured_instprm:
             # With measured instprm: U/V/W (Gaussian Caglioti) and X
-            # (Lorentzian strain) are fixed at the Si-standard values —
+            # (Lorentzian size-like term) are fixed at the Si-standard values —
             # they're instrument-determined.  Zero is also fixed; all
-            # position correction goes through DisplaceX/Y.
+            # position correction goes through the geometry's sample term.
             #
             # When no per-phase HAP broadening is selected, Y remains the
             # shared sample-width handle. When Size/Mustrain is selected,
@@ -3148,7 +3226,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             # No measured instprm + verification_mode: tighten the profile
             # to reduce X↔Y correlation.  X is fixed at 0 (strain second-
             # order for nanocrystals).  Zero is fixed at the seed value;
-            # DisplaceX/Y absorbs position correction.  V is fixed
+            # Sample displacement absorbs position correction. V is fixed
             # (correlated with U and W).  This leaves U, W, Y refinable —
             # the minimum set that can describe Caglioti+Lorentzian width.
             _inst_params_stg2 = ['U', 'W', 'Y']
@@ -3169,13 +3247,13 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
 
         # Swap Zero ↔ Displace (when verify_use_zero_not_displace is on):
         # Add Zero to the refinable list, drop displacement from the
-        # Sample Parameters list, and explicitly zero the DisplaceX/Y
+        # Sample Parameters list, and explicitly zero each displacement
         # value so it can't drift from a previous stage.
         if use_zero_not_displace_opt:
             if 'Zero' not in _inst_params_stg2:
                 _inst_params_stg2 = list(_inst_params_stg2) + ['Zero']
             try:
-                for _disp_key in ('DisplaceX', 'DisplaceY'):
+                for _disp_key in ('Shift', 'DisplaceX', 'DisplaceY'):
                     _dp = histogram.data['Sample Parameters'].get(_disp_key)
                     if _dp and isinstance(_dp, list):
                         _dp[0] = 0.0
@@ -3190,12 +3268,12 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         else:
             _stg2_sample_params = [_displace_stg2]
 
-        # Diagnostic: add X (Lorentzian strain) to the refine list.
+        # X/cos(theta) and HAP Size represent the same angular dependence.
         # Stacks on top of any of the above branches.
-        if refine_x_opt and _any_hap_mustrain_requested:
+        if refine_x_opt and _any_hap_size_requested:
             print(
-                "  Stage 2: Free X ignored because per-phase Mustrain is "
-                "active; refining both would duplicate strain broadening.",
+                "  Stage 2: Free X ignored because per-phase Size is "
+                "active; refining both would duplicate size broadening.",
                 flush=True)
         elif refine_x_opt and 'X' not in _inst_params_stg2:
             _inst_params_stg2 = list(_inst_params_stg2) + ['X']
@@ -3768,9 +3846,9 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                           f"phase {_idx_s}: {_e}", flush=True)
         # Displacement correction depends on geometry:
         #   capillary       → DisplaceY (radial displacement from beam axis)
-        #   bragg_brentano  → DisplaceX (sample-height/flat-plate displacement)
+        #   bragg_brentano  → Shift (sample-height/flat-plate displacement)
         # Using the wrong model distorts peak positions and lattice params.
-        _displace_param = 'DisplaceX' if geometry == 'bragg_brentano' else 'DisplaceY'
+        _displace_param = _sample_displacement_parameter(geometry)
         print(f"  Stage 6: displacement model = {_displace_param} "
               f"(geometry={geometry})", flush=True)
 
@@ -3808,7 +3886,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             if 'Zero' not in _inst_params_stg6:
                 _inst_params_stg6 = list(_inst_params_stg6) + ['Zero']
             try:
-                for _disp_key in ('DisplaceX', 'DisplaceY'):
+                for _disp_key in ('Shift', 'DisplaceX', 'DisplaceY'):
                     _dp = histogram.data['Sample Parameters'].get(_disp_key)
                     if _dp and isinstance(_dp, list):
                         _dp[0] = 0.0
@@ -3823,11 +3901,11 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         else:
             _stg6_sample_params = [_displace_param]
 
-        # Diagnostic: add X (Lorentzian strain) to the refine list.
-        if refine_x_opt and _any_hap_mustrain_requested:
+        # Keep the same X/Size constraint as Stage 2 in the final fit.
+        if refine_x_opt and _any_hap_size_requested:
             print(
-                "  Stage 6: Free X ignored because per-phase Mustrain is "
-                "active; refining both would duplicate strain broadening.",
+                "  Stage 6: Free X ignored because per-phase Size is "
+                "active; refining both would duplicate size broadening.",
                 flush=True)
         elif refine_x_opt and 'X' not in _inst_params_stg6:
             _inst_params_stg6 = list(_inst_params_stg6) + ['X']
@@ -4168,14 +4246,13 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             zero_shift = 0.0
 
         # Sample displacement (refined Stage 2 + Stage 6).  For
-        # bragg_brentano: DisplaceX (sample-height shift, mm).  For
+        # bragg_brentano: Shift (sample-height shift, microns). For
         # capillary/Synergy-S: DisplaceY (radial offset from beam axis,
-        # mm).  GSAS-II stores Sample Parameters as [value, refine_flag].
+        # microns). GSAS-II stores Sample Parameters as [value, refine_flag].
         # We expose this so users can confirm the cell-vs-displacement
         # trade-off didn't move position offset into the cell.
         try:
-            _disp_param_name = ('DisplaceX' if geometry == 'bragg_brentano'
-                                else 'DisplaceY')
+            _disp_param_name = _sample_displacement_parameter(geometry)
             _disp_entry = histogram.data['Sample Parameters'].get(
                 _disp_param_name, [0.0, False])
             displacement_um = float(_disp_entry[0]) if _disp_entry else 0.0
@@ -4613,11 +4690,10 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             microstrain_source = (
                 'gsas_hap_mustrain'
                 if microstrain is not None else None)
-            # In verification_mode, Stage 4b (size refinement) was skipped,
-            # so HAP Size is at GSAS-II's default (~1 µm).  Discard that
-            # value and let the Y-based fallback below estimate size from
-            # the refined Y parameter.
-            if verification_mode and not _size_was_requested:
+            # Size can be disabled in any workflow, not only verification
+            # mode. Never report an unrequested HAP value as a fitted size;
+            # allow the Y / phase-pattern estimates below to run instead.
+            if not _size_was_requested:
                 cryst_A = None
                 cryst_source = None
 
@@ -4766,16 +4842,19 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             # display).  When use_gsas_ref_ticks is True, switch to
             # GSAS-II's RefList (all reflections including weak ones).
             if use_gsas_ticks_opt and gsas_phase_refs:
-                tick_positions = [round(r[0], 3) for r in gsas_phase_refs
-                                   if tt_min <= r[0] <= tt_max]
+                tick_source_refs = [
+                    r for r in gsas_phase_refs if tt_min <= r[0] <= tt_max]
                 _tick_src_label = 'GSAS-II RefList'
             else:
-                tick_positions = [
-                    round(r[0], 3)
-                    for r in filter_reflections_by_relative_intensity(
-                        phase_refs)
-                ]
+                tick_source_refs = filter_reflections_by_relative_intensity(
+                    phase_refs)
                 _tick_src_label = 'Python refs'
+            tick_reflections = [{
+                'two_theta': round(float(reflection[0]), 3),
+                'hkl': list(reflection[2]),
+            } for reflection in tick_source_refs]
+            tick_positions = [
+                reflection['two_theta'] for reflection in tick_reflections]
             print(f"  Tick positions for '{ph.get('name', '?')}' (SG {sg}): "
                   f"{len(tick_positions)} reflections in "
                   f"{tt_min:.1f}–{tt_max:.1f}° 2θ "
@@ -4905,6 +4984,10 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                 'crystallite_size_A':  round(cryst_A, 1) if cryst_A else None,
                 'crystallite_size_nm': round(cryst_A / 10, 2) if cryst_A else None,
                 'crystallite_size_source': cryst_source,
+                'gsas_hap_size_nm': (
+                    cryst_A / 10.0 if cryst_source == 'gsas_hap_size' else None),
+                'gsas_size_model': prof.get('gsas_size_model'),
+                'gsas_size_lg_mix': prof.get('gsas_size_lg_mix'),
                 'microstrain_microstrain': (
                     round(float(microstrain), 2)
                     if microstrain is not None else None),
@@ -4923,6 +5006,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                 'weight_fraction_method': weight_fraction_method,
                 'n_reflections':           len(tick_positions),
                 'tick_positions':      tick_positions,
+                'tick_reflections':    tick_reflections,
                 'seeded_by':           'gsas2',
             })
 
@@ -4980,15 +5064,11 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             saved_bg_flag = histogram.data['Background'][0][1]
             histogram.data['Background'][0][1] = False
 
-            # Save & turn off sample displacement refinement flags for
-            # BOTH DisplaceX (Bragg-Brentano) and DisplaceY (Debye-Scherrer
-            # transparency).  The pipeline only actively refines one of
-            # these (DisplaceY for capillary data), but saving both is
-            # defensive — if the geometry is changed later we don't want
-            # a stale refinement flag to leak through phase isolation.
+            # Save and turn off every geometry's displacement flag so phase
+            # isolation only recalculates curves without changing positions.
             saved_displace_flags = {}
             try:
-                for _disp_key in ('DisplaceX', 'DisplaceY'):
+                for _disp_key in ('Shift', 'DisplaceX', 'DisplaceY'):
                     _dp = histogram.data['Sample Parameters'].get(_disp_key)
                     if _dp and isinstance(_dp, list) and len(_dp) >= 2:
                         saved_displace_flags[_disp_key] = _dp[1]

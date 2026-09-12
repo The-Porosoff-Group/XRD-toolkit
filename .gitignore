@@ -1,12 +1,63 @@
+# Local environments and generated caches
 __pycache__/
 *.py[cod]
 .venv/
+venv/
 .conda_env/
 .gsas_tmp/
 .gsas2_src/
+.pytest_cache/
+.claude/
+/release/
+
+# Local configuration and saved user fits (never publish these)
+config.yaml
+.env
+.env.*
+!.env.example
+xrd_refinement_presets.json
+
+# Measured data, fitting projects, and generated output
 uploads/
 results/
-config.yaml
-xrd_refinement_presets.json
+data/
+fits/
+outputs/
+cifs/
+/POROSOFF_NIST-Si640/
+*.dat
+*.xy
+*.xye
+*.fxye
+*.raw
+*.ras
+*.rasx
+*.csv
+*.tsv
+*.xls
+*.xlsx
+*.xlsm
+*.gpx
+*.lst
+*.npy
+*.npz
+*.instprm
+*.txt
+!requirements*.txt
+!fixtures/**
+# These two instrument reference profiles are intentional bundled inputs.
+!/smartlab_Si640g.instprm
+!/synergy_s_Si640g.instprm
+*_xrd_refinement*.png
+xrd_refinement*.png
+*_refinement_results.*
+*_report.json
+*_candidate*
+
+# Backups, temporary logs, and operating-system metadata
+*.bak
 *.tmp
 *.log
+.server_test.*
+.DS_Store
+Thumbs.db

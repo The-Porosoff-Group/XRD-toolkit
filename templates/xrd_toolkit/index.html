@@ -747,7 +747,7 @@
               <label>X-ray Source</label>
               <select id="xrd-source" onchange="updateWavelength()">
                 <option value="1.54056">Cu Kα  (1.54056 Å)</option>
-                <option value="1.54439">Cu Kα2 (1.54439 Å)</option>
+                <option value="1.54439">Cu Kα₂ (1.54439 Å)</option>
                 <option value="0.71073">Mo Kα  (0.71073 Å)</option>
                 <option value="1.78897">Co Kα  (1.78897 Å)</option>
                 <option value="1.93604">Fe Kα  (1.93604 Å)</option>
@@ -763,6 +763,32 @@
               <div class="form-group">
                 <label>Sample ID</label>
                 <input type="text" id="xrd-sample-id" placeholder="e.g. β-Mo₂C_350C">
+              </div>
+              <div class="form-group full">
+                <label>Figure Title <span style="color:var(--muted);font-weight:400;">— optional</span></label>
+                <input type="text" id="xrd-figure-title" maxlength="80" placeholder="Leave blank to use the Sample ID">
+                <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;text-transform:none;letter-spacing:normal;">
+                  <input type="checkbox" id="xrd-show-figure-title" checked style="width:auto;"
+                         onchange="document.getElementById('xrd-figure-title').disabled = !this.checked;">
+                  Show figure title
+                </label>
+                <span style="font-size:11px;color:var(--muted);">Uncheck for no title on figures exported with the next fit.</span>
+              </div>
+              <div class="form-group">
+                <label for="xrd-size-reporting">Size reporting</label>
+                <select id="xrd-size-reporting">
+                  <option value="both" selected>Both (recommended)</option>
+                  <option value="hap">GSAS HAP size (K = 1)</option>
+                  <option value="scherrer">Scherrer-equivalent size</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="xrd-scherrer-k">Scherrer shape factor K</label>
+                <input type="number" id="xrd-scherrer-k" value="0.90" min="0.01" step="0.01">
+              </div>
+              <div class="form-group full" style="font-size:11px;color:var(--muted);">
+                Applies to the next fit's results and workbook. Keep Size checked in the phase card.
+                Scherrer-equivalent rescales the fitted GSAS size by K; it is not a separate single-peak measurement.
               </div>
               <div class="form-group">
                 <label>2θ Min (°)</label>
@@ -900,8 +926,8 @@
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px;border:1px dashed var(--border);border-radius:6px;background:rgba(255,255,255,0.02);">
             <span style="font-size:12px;color:var(--muted);">Generate gamma carbide CIF:</span>
             <select id="xrd-gamma-metal" style="font-size:12px;padding:3px 6px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;">
-              <option value="W">WC1-x cubic</option>
-              <option value="Mo">MoC1-x cubic</option>
+              <option value="W">WC₁₋ₓ cubic</option>
+              <option value="Mo">MoC₁₋ₓ cubic</option>
             </select>
             <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:4px;" title="Carbon vacancy fraction. The generated CIF has fixed C occupancy = 1 - x.">
               x
@@ -933,7 +959,7 @@
               <b>value</b> is the March-Dollase ratio, where 1.0 means no texture. Fixed values should come from a validated prior or repeated comparison workflow.
               <b>Uniform cell</b>, shown only for W2C-like phases, preserves starting axis ratios while keeping the refined volume.
               It is off in the WC/W2C preset because it changes the fit and is meant for explicit diagnostic comparisons.
-              Cubic WC1-x/MoC1-x compositions are generated as fixed CIFs above; changing x means generating a new CIF, not editing/refining occupancy in the phase card.
+              Cubic WC₁₋ₓ/MoC₁₋ₓ compositions are generated as fixed CIFs above; changing x means generating a new CIF, not editing/refining occupancy in the phase card.
             </div>
           </div>
         </div>
@@ -989,11 +1015,11 @@
               <input type="checkbox" id="xrd-phase-isolation" style="margin-right:4px;" checked>
               Phase isolation
             </label>
-            <label id="zero-not-disp-label" style="display:none;margin-left:6px;font-size:12px;color:var(--muted);cursor:pointer;" title="Swap position handle: refine Zero (overriding the measured instprm's Zero lock) and pin DisplaceX/Y at 0. Use when DisplaceY refuses to move from 0 because the position offset is really a Zero miscalibration that doesn't transfer from the Si standard to this sample. Diagnostic.">
+            <label id="zero-not-disp-label" style="display:none;margin-left:6px;font-size:12px;color:var(--muted);cursor:pointer;" title="Unchecked: refine sample displacement (sample height for SmartLab flat-plate data) with the calibrated Zero fixed. Checked: refine Zero instead and hold sample displacement at zero. Use only one position correction.">
               <input type="checkbox" id="xrd-zero-not-disp" style="margin-right:4px;">
               Refine Zero (fix Disp)
             </label>
-            <label id="refine-x-label" style="display:none;margin-left:6px;font-size:12px;color:var(--muted);cursor:pointer;" title="Free X (Lorentzian strain). Tests strain-like broadening on top of size (Y).">
+            <label id="refine-x-label" style="display:none;margin-left:6px;font-size:12px;color:var(--muted);cursor:pointer;" title="Refine the shared Lorentzian size-like width term. Ignored when a phase's Size is checked.">
               <input type="checkbox" id="xrd-refine-x" style="margin-right:4px;">
               Free X
             </label>
@@ -1030,8 +1056,8 @@
               <b>Quick constrained fit</b> refines only background, phase scales, sample position, and shared peak width.
               <b>Refine cell too</b> is the global cell gate; only phases with <b>Cell</b> ticked in the phase card can move.
               <b>Phase isolation</b> uses GSAS-II calculated phase curves for the plotted phase envelopes.
-              <b>Refine Zero</b> swaps the sample-displacement correction for a zero-shift correction.
-              <b>Free X</b> allows Lorentzian strain broadening.
+              Leave <b>Refine Zero</b> unchecked to refine sample displacement (sample height for SmartLab). Checking it refines Zero instead.
+              <b>Free X</b> allows shared size-like broadening; phase <b>Size</b> takes precedence.
               <b>Fix Y</b> holds the Lorentzian size-width parameter at the entered centidegree value.
               <b>Y ≥ 0</b> prevents unphysical negative size broadening.
               <b>Refine Uiso</b> lets atomic displacement factors refine.
@@ -1066,7 +1092,7 @@
             <div id="xrd-baseline-comparison"></div>
             <div id="xrd-reusable-fit"></div>
             <div id="xrd-phase-results"></div>
-            <div id="xrd-interactive-plot" style="display:none;width:100%;height:500px;border-radius:8px;border:1px solid var(--border);"></div>
+            <div id="xrd-interactive-plot" style="display:none;width:100%;height:540px;border-radius:8px;border:1px solid var(--border);"></div>
             <img class="plot-img" id="xrd-result-plot" src="" alt="XRD refinement plot"
                  style="display:none;">
             <div class="download-row" id="xrd-download-row"></div>
@@ -1416,7 +1442,7 @@ function openXrdFittingGuide() {
       <li><strong>PO:</strong> March-Dollase preferred orientation. <code>fixed</code> uses the entered value; <code>refined</code> lets GSAS-II vary it; <code>off</code> disables it. PO changes relative reflection intensities, so it can trade off with phase fraction.</li>
       <li><strong>Axis/value:</strong> the orientation direction and March-Dollase ratio. Use h k l, or h k i l for hexagonal/trigonal phases; the redundant i index is converted before GSAS-II refinement. A value of 1.0 means no preferred orientation. Fixed values should come from a prior validated refinement, repeated related samples, or independent texture evidence.</li>
       <li><strong>Uniform cell:</strong> a diagnostic constraint for W2C-like phases. It changes the fit and should not be part of a general preset unless validated for that sample family.</li>
-      <li><strong>Generated gamma carbide CIFs:</strong> use the generator in the phase panel to make a fixed-composition WC1-x or MoC1-x CIF. Changing x means generating another CIF; occupancy is not refined in the phase card.</li>
+      <li><strong>Generated gamma carbide CIFs:</strong> use the generator in the phase panel to make a fixed-composition WC₁₋ₓ or MoC₁₋ₓ CIF. Changing x means generating another CIF; occupancy is not refined in the phase card.</li>
     </ul>
   </div>
 
@@ -1424,7 +1450,7 @@ function openXrdFittingGuide() {
     <h2>Three-phase carbide example</h2>
     <ol>
       <li>Use a narrow range first, typically 20-55 degrees, to reduce unrelated high-angle/profile leverage while assigning phases.</li>
-      <li>Add gamma WC1-x/MoC1-x with the CIF generator, plus hexagonal WC and orthorhombic W2C/Mo2C as needed.</li>
+      <li>Add gamma WC₁₋ₓ/MoC₁₋ₓ with the CIF generator, plus hexagonal WC and orthorhombic W₂C/Mo₂C as needed.</li>
       <li>Run <code>Quick constrained fit</code> with all phase-card <code>Cell</code>, <code>Size</code>, <code>Mustrain</code>, and <code>PO</code> controls off unless a prior recipe already validates them.</li>
       <li>Turn on <code>Cell</code> for one phase at a time. If the gamma cubic peaks are shifted, test only the gamma phase first; if W2C/Mo2C peaks are shifted, test only that phase.</li>
       <li>Each run starts from the selected CIF. Keep <code>Cell</code> enabled in a final model that requires the refined lattice, or export/use a validated CIF with that lattice before switching Cell off in later runs.</li>
@@ -2784,6 +2810,8 @@ function getXrdControlState() {
     tt_min: document.getElementById('xrd-tt-min')?.value || '',
     tt_max: document.getElementById('xrd-tt-max')?.value || '',
     n_bg_coeffs: document.getElementById('xrd-bg-coeffs')?.value || 'auto',
+    size_reporting_mode: document.getElementById('xrd-size-reporting')?.value || 'both',
+    scherrer_k: document.getElementById('xrd-scherrer-k')?.value || '0.9',
     instrument: document.getElementById('xrd-instrument')?.value || 'auto',
     fix_y_value: document.getElementById('xrd-fix-y-value')?.value || '',
     checkboxes: {},
@@ -2805,6 +2833,8 @@ function applyXrdControlState(controls = {}) {
   setVal('xrd-tt-min', controls.tt_min);
   setVal('xrd-tt-max', controls.tt_max);
   setVal('xrd-bg-coeffs', controls.n_bg_coeffs);
+  setVal('xrd-size-reporting', controls.size_reporting_mode || 'both');
+  setVal('xrd-scherrer-k', controls.scherrer_k ?? '0.90');
   setVal('xrd-instrument', controls.instrument);
   setVal('xrd-fix-y-value', controls.fix_y_value);
   Object.entries(controls.checkboxes || {}).forEach(([id, checked]) => {
@@ -3050,9 +3080,17 @@ async function runXRD(method) {
       document.getElementById('xrd-source').options[
         document.getElementById('xrd-source').selectedIndex].text);
     fd.append('sample_id',   document.getElementById('xrd-sample-id').value || xrdFile.name);
+    fd.append('figure_title', document.getElementById('xrd-figure-title').value.trim());
+    fd.append('show_figure_title', document.getElementById('xrd-show-figure-title').checked);
     fd.append('tt_min',      document.getElementById('xrd-tt-min').value);
     fd.append('tt_max',      document.getElementById('xrd-tt-max').value);
     fd.append('n_bg_coeffs', document.getElementById('xrd-bg-coeffs').value || 'auto');
+    const scherrerK = Number(document.getElementById('xrd-scherrer-k').value);
+    if (!Number.isFinite(scherrerK) || scherrerK <= 0) {
+      throw new Error('Scherrer K must be a finite positive number.');
+    }
+    fd.append('size_reporting_mode', document.getElementById('xrd-size-reporting').value);
+    fd.append('scherrer_k', String(scherrerK));
     fd.append('output_dir',  document.getElementById('xrd-output-dir').value);
     fd.append('method',      method);
     // Instrument selection
@@ -3085,7 +3123,7 @@ async function runXRD(method) {
     if (zeroNotDispCheckbox && zeroNotDispCheckbox.checked) {
       fd.append('verify_use_zero_not_displace', 'true');
     }
-    // Free X — Lorentzian strain diagnostic
+    // Free X — shared Lorentzian size-like width diagnostic
     const refineXCheckbox = document.getElementById('xrd-refine-x');
     if (refineXCheckbox && refineXCheckbox.checked) {
       fd.append('verify_refine_x', 'true');
@@ -3178,6 +3216,17 @@ async function runXRD(method) {
   if (document.getElementById('btn-xrd-gsas2')) document.getElementById('btn-xrd-gsas2').disabled = false;
 }
 
+function xrdSizeReportHtml(ph) {
+  const lines = ph.size_reporting_lines || [{
+    label: ph.crystallite_size_source === 'gsas_hap_size' ? 'GSAS HAP size (K = 1)' : 'Size estimate',
+    value_nm: ph.crystallite_size_nm,
+  }];
+  const values = lines.map(line => `<div><span style="color:var(--muted);">${escHtml(line.label)} = </span>${line.value_nm == null ? 'not available' : fmtResultValue(line.value_nm, 2) + ' nm'}</div>`).join('');
+  const note = ph.size_reporting_note
+    ? `<div style="font-size:11px;color:var(--muted);margin-top:4px;">${escHtml(ph.size_reporting_note)}</div>` : '';
+  return values + note;
+}
+
 function fmtResultValue(v, digits = 3) {
   if (v === null || v === undefined || v === '') return '—';
   const n = Number(v);
@@ -3240,12 +3289,6 @@ function renderReusableFitParameters(data) {
     const fwhmSource = ph.fwhm_reference_source
       ? `, ${escHtml(String(ph.fwhm_reference_source).replace(/_/g, ' '))}`
       : '';
-    const sizeLine = ph.crystallite_size_nm != null
-      ? `${fmtResultValue(ph.crystallite_size_nm, 2)} nm`
-      : '—';
-    const sizeSource = ph.crystallite_size_source
-      ? ` (${escHtml(String(ph.crystallite_size_source).replace(/_/g, ' '))})`
-      : '';
     const microstrainLine = ph.microstrain_microstrain != null
       ? `${fmtResultValue(ph.microstrain_microstrain, 1)} microstrain`
       : 'not refined';
@@ -3282,7 +3325,7 @@ function renderReusableFitParameters(data) {
         </div>
         <div class="reuse-metric">
           <div class="reuse-label">Size output</div>
-          <div class="reuse-value">${sizeLine}${sizeSource}</div>
+          <div class="reuse-value">${xrdSizeReportHtml(ph)}</div>
         </div>
         <div class="reuse-metric">
           <div class="reuse-label">Microstrain</div>
@@ -3554,6 +3597,158 @@ function renderBaselineComparison() {
   </div>`;
 }
 
+function renderXrdPublicationPlot(data) {
+  const plotEl = document.getElementById('xrd-result-plot');
+  const interactivePlot = document.getElementById('xrd-interactive-plot');
+  const palette = {
+    paper:'#0d1117', plot:'#161b22', text:'#f0f3f6', grid:'#39414d',
+    observed:'#58a6ff', calculated:'#f0f6fc', background:'#a7b0bd', residual:'#79c0ff'
+  };
+  const phasePalette = PHASE_COLORS;
+
+  if (data.plot_data?.tt?.length) {
+    const pd = data.plot_data;
+    const phases = data.phase_results || [];
+    const nPhases = Math.max(phases.length, 1);
+    const plotHeight = 560;
+    interactivePlot.style.height = `${plotHeight}px`;
+
+    const traces = [];
+    const colorWithAlpha = (hex, alpha) => {
+      const value = String(hex).replace('#', '');
+      const red = parseInt(value.slice(0, 2), 16);
+      const green = parseInt(value.slice(2, 4), 16);
+      const blue = parseInt(value.slice(4, 6), 16);
+      return `rgba(${red},${green},${blue},${alpha})`;
+    };
+
+    (pd.phase_patterns || []).forEach((component, i) => {
+      const phase = phases[i] || {};
+      const color = phasePalette[i % phasePalette.length];
+      const phaseTop = (pd.y_background || []).map(
+        (value, j) => Number(value) + Math.max(Number(component[j] || 0), 0));
+      const weight = phase['weight_fraction_%'];
+      const uncertainty = phase['weight_fraction_err_%'];
+      const weightText = phases.length <= 1 || weight == null ? '' :
+        `, ${weight}${uncertainty == null ? '' : ` ± ${uncertainty}`} wt. %`;
+      const phaseLabel = phase.tick_label || phase.display_label || String(
+        phase.formula || phase.name || 'Fitted phase').replace(/[_-]+/g, ' ');
+      traces.push({
+        x:pd.tt, y:pd.y_background, type:'scatter', mode:'lines',
+        line:{color:'rgba(0,0,0,0)',width:0}, hoverinfo:'skip', showlegend:false,
+      });
+      traces.push({
+        x:pd.tt, y:phaseTop,
+        name:phases.length === 1 ? phaseLabel : (phase.legend_label || `${phaseLabel}${weightText}`),
+        type:'scatter', mode:'lines', line:{color:color,width:1.5},
+        fill:'tonexty', fillcolor:colorWithAlpha(color, 0.42),
+        hovertemplate:`2θ: %{x:.3f}°<br>${phaseLabel} contribution: %{y:.4g}<extra></extra>`,
+      });
+    });
+
+    traces.push(
+      {x:pd.tt, y:pd.y_background, name:'Fitted background', type:'scattergl', mode:'lines',
+       line:{color:palette.background,width:1.35,dash:'dash'}, hovertemplate:'2θ: %{x:.3f}°<br>Background intensity: %{y:.4g}<extra></extra>'},
+      {x:pd.tt, y:pd.y_obs, name:'Observed intensity', type:'scattergl', mode:'lines',
+       line:{color:palette.observed,width:1.5}, hovertemplate:'2θ: %{x:.3f}°<br>Observed intensity: %{y:.4g}<extra></extra>'},
+      {x:pd.tt, y:pd.y_calc, name:'Calculated pattern', type:'scattergl', mode:'lines',
+       line:{color:palette.calculated,width:2.0}, hovertemplate:'2θ: %{x:.3f}°<br>Calculated intensity: %{y:.4g}<extra></extra>'}
+    );
+
+    traces.push({
+      x:pd.tt, y:pd.residuals, name:'Observed minus calculated',
+      type:'scattergl', mode:'lines', line:{color:palette.residual,width:1.25},
+      yaxis:'y2', showlegend:false,
+      hovertemplate:'2θ: %{x:.3f}°<br>Residual intensity: %{y:.4g}<extra></extra>',
+    });
+
+    const tickFloor = 0.18;
+    const mainBottom = 0.45;
+    const tickCeiling = 0.35;
+    const tickSpace = tickCeiling - tickFloor;
+    const rowHeight = tickSpace / nPhases;
+    const shapes = [];
+    const annotations = [{
+      x:0.5,y:0.395,xref:'paper',yref:'paper',
+      text:'Diffraction angle, 2θ (degrees)',showarrow:false,
+      xanchor:'center',yanchor:'middle',font:{color:palette.text,size:12},
+    }];
+    phases.forEach((phase, i) => {
+      const color = phasePalette[i % phasePalette.length];
+      const rowBottom = tickFloor + (nPhases - i - 1) * rowHeight;
+      const rowCenter = rowBottom + rowHeight * 0.50;
+      const reflections = phase.tick_reflections || [];
+      const represented = new Set();
+      reflections.forEach(reflection => {
+        const position = Number(reflection.two_theta);
+        represented.add(position.toFixed(3));
+        shapes.push({type:'line',xref:'x',yref:'paper',x0:position,x1:position,
+          y0:rowBottom + rowHeight * 0.08,y1:rowBottom + rowHeight * 0.26,
+          line:{color:color,width:1.8}});
+        const label = reflection.label || (Array.isArray(reflection.hkl)
+          ? `(${reflection.hkl.join(' ')})` : '');
+        if (label) annotations.push({
+          x:position,y:rowBottom + rowHeight * 0.34,xref:'x',yref:'paper',
+          text:label,showarrow:false,textangle:-60,xanchor:'center',yanchor:'bottom',
+          font:{color:palette.text,size:10},
+        });
+      });
+      (phase.tick_positions || []).forEach(position => {
+        if (represented.has(Number(position).toFixed(3))) return;
+        shapes.push({type:'line',xref:'x',yref:'paper',x0:position,x1:position,
+          y0:rowBottom + rowHeight * 0.08,y1:rowBottom + rowHeight * 0.26,
+          line:{color:color,width:1.8}});
+      });
+      const rowLabel = phase.tick_label || phase.display_label || String(
+        phase.formula || phase.name || 'Fitted phase').replace(/[_-]+/g, ' ');
+      annotations.push({
+        x:-0.012,y:rowCenter,xref:'paper',yref:'paper',text:`<b>${escHtml(rowLabel)}</b>`,
+        showarrow:false,xanchor:'right',yanchor:'middle',align:'right',
+        font:{color:color,size:10},bgcolor:'rgba(13,17,23,.92)',borderpad:1,
+      });
+    });
+
+    const sample = document.getElementById('xrd-sample-id')?.value || xrdFile?.name || 'Sample';
+    const figureTitle = document.getElementById('xrd-figure-title')?.value.trim() || sample;
+    const showFigureTitle = document.getElementById('xrd-show-figure-title')?.checked ?? true;
+    const stats = data.statistics || {};
+    const statsTitle = `Rwp ${stats.Rwp ?? '—'} % · Rp ${stats.Rp ?? '—'} % · χ² ${stats.chi2 ?? '—'} · GoF ${stats.GoF ?? '—'}`;
+    const layout = {
+      paper_bgcolor:palette.paper, plot_bgcolor:palette.plot,
+      font:{color:palette.text,size:12,family:'Arial, sans-serif'},
+      margin:{l:110,r:22,t:showFigureTitle ? 70 : 20,b:58},
+      title:showFigureTitle ? {text:`<b>${escHtml(figureTitle)}</b><br><span style="font-size:11px">${statsTitle}</span>`,
+             x:0.5,xanchor:'center',font:{size:17}} : undefined,
+      xaxis:{gridcolor:palette.grid,zeroline:false,tickfont:{size:12}},
+      yaxis:{title:{text:'Intensity (arbitrary units)',font:{size:14}},
+             gridcolor:palette.grid,zeroline:false,domain:[mainBottom,1],tickfont:{size:12}},
+      yaxis2:{title:{text:'Difference',font:{size:12}},
+              gridcolor:palette.grid,zeroline:true,zerolinecolor:palette.background,
+              domain:[0,0.15],anchor:'x',tickfont:{size:11}},
+      legend:{orientation:'v',x:0.992,y:0.985,xanchor:'right',yanchor:'top',
+              bgcolor:'rgba(28,33,40,.90)',
+              bordercolor:palette.grid,borderwidth:1,font:{size:11}},
+      shapes:shapes,annotations:annotations,dragmode:'zoom',
+    };
+    const config = {
+      responsive:true,displayModeBar:true,displaylogo:false,
+      modeBarButtonsToAdd:['pan2d','zoomIn2d','zoomOut2d','autoScale2d'],
+      modeBarButtonsToRemove:['toImage'],
+    };
+    interactivePlot.style.display = 'block';
+    plotEl.style.display = 'none';
+    Plotly.react(interactivePlot,traces,layout,config);
+  } else if (data.plot_paths?.dark) {
+    interactivePlot.style.display = 'none';
+    plotEl.src = '/api/download?path=' + encodeURIComponent(data.plot_paths.dark);
+    plotEl.style.display = 'block';
+  } else if (data.plot_b64) {
+    interactivePlot.style.display = 'none';
+    plotEl.src = 'data:image/png;base64,' + data.plot_b64;
+    plotEl.style.display = 'block';
+  }
+}
+
 function showXRDResults(data) {
   xrdLastResult = data;
   xrdLastFitSnapshot = buildXrdFitSnapshot(data);
@@ -3579,11 +3774,11 @@ function showXRDResults(data) {
     {l:'Rwp',v:st.Rwp+'%'}, {l:'Rp',v:st.Rp+'%'}, {l:'χ²',v:st.chi2},
     {l:'GoF',v:st.GoF}, {l:'Zero shift',v:data.zero_shift+'°'}
   ];
-  // Sample displacement (DisplaceX for BB, DisplaceY for capillary).
+  // Sample displacement (Shift for BB, DisplaceY for capillary).
   // Surfaces the cell-vs-displacement trade-off in verify+cell runs.
   if (data.displacement_um != null && data.displacement_param) {
     statBoxes.push({
-      l: data.displacement_param,
+      l: data.displacement_param === 'Shift' ? 'Sample height' : 'Sample displacement',
       v: Number(data.displacement_um).toFixed(1) + ' µm'
     });
   }
@@ -3614,9 +3809,6 @@ function showXRDResults(data) {
     const fwhmRefText = hasFwhmRef ? `${fwhmRef.toFixed(2)}&deg;` : 'phase peak';
     const fwhmHkl = Array.isArray(ph.fwhm_reference_hkl)
       ? ` (${ph.fwhm_reference_hkl.join('')})`
-      : '';
-    const sizeSource = ph.crystallite_size_source
-      ? ` <span style="color:var(--muted);font-size:10px;">(${String(ph.crystallite_size_source).replace(/_/g, ' ')})</span>`
       : '';
     const microstrainHtml = ph.microstrain_microstrain != null
       ? `<div><span style="color:var(--muted);">Microstrain = </span>${fmtResultValue(ph.microstrain_microstrain, 1)} microstrain${ph.microstrain_source ? ` <span style="color:var(--muted);font-size:10px;">(${escHtml(String(ph.microstrain_source).replace(/_/g, ' '))})</span>` : ''}</div>`
@@ -3674,7 +3866,7 @@ function showXRDResults(data) {
           <div><span style="color:var(--muted);">α = </span>${ph.alpha}°</div>
           <div><span style="color:var(--muted);">β = </span>${ph.beta}°</div>
           <div><span style="color:var(--muted);">γ = </span>${ph.gamma}°</div>
-          <div><span style="color:var(--muted);">Size = </span>${ph.crystallite_size_nm ?? '—'} nm${sizeSource}</div>
+          <div class="xrd-size-report">${xrdSizeReportHtml(ph)}</div>
           <div><span style="color:var(--muted);">FWHM @ ${fwhmRefText}${fwhmHkl} = </span>${ph.fwhm_deg ?? 'n/a'}${ph.fwhm_deg != null ? '&deg;' : ''}</div>
           <div><span style="color:var(--muted);">Eta @ ${fwhmRefText} = </span>${ph.eta_at_fwhm_reference ?? ph.eta_at_strongest ?? ph.eta ?? 'n/a'}</div>
           ${microstrainHtml}
@@ -3689,111 +3881,18 @@ function showXRDResults(data) {
       </div>`;
   });
 
-  // Plot — interactive if plot_data available, static fallback
-  const plotEl = document.getElementById('xrd-result-plot');
-  const interactivePlot = document.getElementById('xrd-interactive-plot');
-
-  if (data.plot_data && data.plot_data.tt && data.plot_data.tt.length > 0) {
-    const pd = data.plot_data;
-    const phColors = xrdPhases.map((p, i) => p._plot_color || PHASE_COLORS[i % PHASE_COLORS.length]);
-
-    // Main traces: observed, calculated, background
-    const traces = [
-      { x: pd.tt, y: pd.y_obs, name: 'I_obs', type: 'scattergl',
-        mode: 'lines', line: { color: '#58a6ff', width: 1 } },
-      { x: pd.tt, y: pd.y_calc, name: 'I_calc', type: 'scattergl',
-        mode: 'lines', line: { color: '#ffffff', width: 1.2 } },
-      { x: pd.tt, y: pd.y_background, name: 'Background', type: 'scattergl',
-        mode: 'lines', line: { color: '#8b949e', width: 1, dash: 'dash' } },
-    ];
-
-    // Phase envelope traces (individual species contributions)
-    if (pd.phase_patterns && data.phase_results) {
-      for (let i = 0; i < pd.phase_patterns.length; i++) {
-        const pp = pd.phase_patterns[i];
-        const pr = data.phase_results[i] || {};
-        const col = phColors[i] || PHASE_COLORS[i % PHASE_COLORS.length];
-        const label = `${pr.name || 'Phase '+(i+1)} ${pr.spacegroup || ''}`.trim();
-        const wt = pr['weight_fraction_%'];
-        const wtStr = wt != null ? ` ${wt}%` : '';
-        // Add background to phase pattern for display (same as static plot)
-        const ppWithBg = pp.map((v, j) => v + (pd.y_background[j] || 0));
-        traces.push({
-          x: pd.tt, y: ppWithBg,
-          name: `${label}${wtStr}`,
-          type: 'scattergl', mode: 'lines',
-          line: { color: col, width: 1 },
-          fill: 'tonexty', fillcolor: col + '20',
-        });
-      }
-    }
-
-    // Residual trace (separate y-axis)
-    traces.push(
-      { x: pd.tt, y: pd.residuals, name: 'Residuals', type: 'scattergl',
-        mode: 'lines', line: { color: '#f0883e', width: 0.8 },
-        yaxis: 'y2' }
-    );
-
-    // Tick marks as shapes (vertical lines in the tick panel)
-    const shapes = [];
-    if (data.phase_results) {
-      const yTickBase = 0.21;  // just above residual panel
-      const yTickH = 0.03;
-      for (let i = 0; i < data.phase_results.length; i++) {
-        const pr = data.phase_results[i];
-        const col = phColors[i] || PHASE_COLORS[i % PHASE_COLORS.length];
-        const ticks = pr.tick_positions || [];
-        for (const tt of ticks) {
-          shapes.push({
-            type: 'line', xref: 'x', yref: 'paper',
-            x0: tt, x1: tt,
-            y0: yTickBase + i * yTickH,
-            y1: yTickBase + (i + 1) * yTickH,
-            line: { color: col, width: 1 },
-          });
-        }
-      }
-    }
-
-    const layout = {
-      paper_bgcolor: 'rgba(0,0,0,0)',
-      plot_bgcolor: '#161b22',
-      font: { color: '#c9d1d9', size: 11 },
-      margin: { l: 60, r: 20, t: 40, b: 50 },
-      title: { text: `${data.method || 'Refinement'} — Rwp=${data.statistics?.Rwp || '?'}%`,
-               font: { size: 13 } },
-      xaxis: { title: '2θ (degrees)', gridcolor: '#30363d', zeroline: false },
-      yaxis: { title: 'Intensity', gridcolor: '#30363d', zeroline: false,
-               domain: [0.28, 1.0] },
-      yaxis2: { title: 'Residual', gridcolor: '#30363d', zeroline: true,
-                zerolinecolor: '#58a6ff',
-                domain: [0.0, 0.18], anchor: 'x' },
-      legend: { x: 0.01, y: 0.99, bgcolor: 'rgba(22,27,34,0.8)',
-                font: { size: 10 } },
-      shapes: shapes,
-      dragmode: 'zoom',
-    };
-    const config = {
-      responsive: true,
-      displayModeBar: true,
-      modeBarButtonsToAdd: ['pan2d', 'zoomIn2d', 'zoomOut2d', 'autoScale2d'],
-      displaylogo: false,
-    };
-    interactivePlot.style.display = 'block';
-    plotEl.style.display = 'none';
-    Plotly.newPlot(interactivePlot, traces, layout, config);
-  } else if (data.plot_b64) {
-    // Static fallback
-    interactivePlot.style.display = 'none';
-    plotEl.src = 'data:image/png;base64,' + data.plot_b64;
-    plotEl.style.display = 'block';
-  }
-
+  renderXrdPublicationPlot(data);
   // Downloads
-  document.getElementById('xrd-download-row').innerHTML = `
-    <button class="btn-sm green" onclick="openFolder('${escPath(data.output_dir)}')">📁 Open Folder</button>
-    <button class="btn-sm" onclick="downloadFile('${escPath(data.summary_path)}')">⬇ Summary Excel</button>`;
+  const xrdDownloads = [
+    `<button class="btn-sm green" onclick="openFolder('${escPath(data.output_dir)}')">📁 Open Folder</button>`
+  ];
+  if (data.plot_paths?.light) xrdDownloads.push(
+    `<button class="btn-sm green" onclick="downloadFile('${escPath(data.plot_paths.light)}')">⬇ Light Publication Figure (PNG)</button>`);
+  if (data.plot_paths?.dark) xrdDownloads.push(
+    `<button class="btn-sm" onclick="downloadFile('${escPath(data.plot_paths.dark)}')">⬇ Dark Presentation Figure (PNG)</button>`);
+  if (data.summary_path) xrdDownloads.push(
+    `<button class="btn-sm" onclick="downloadFile('${escPath(data.summary_path)}')">⬇ Refinement Workbook</button>`);
+  document.getElementById('xrd-download-row').innerHTML = xrdDownloads.join('');
 
   panel.scrollIntoView({behavior:'smooth', block:'start'});
 }
@@ -3827,10 +3926,14 @@ function resetXRD() {
 
   // Reset search UI
   ['xrd-elements','xrd-phase-name','xrd-formula','xrd-filter',
-   'xrd-sample-id','xrd-output-dir'].forEach(id => {
+   'xrd-sample-id','xrd-figure-title','xrd-output-dir'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
+  document.getElementById('xrd-show-figure-title').checked = true;
+  document.getElementById('xrd-size-reporting').value = 'both';
+  document.getElementById('xrd-scherrer-k').value = '0.90';
+  document.getElementById('xrd-figure-title').disabled = false;
   document.getElementById('xrd-candidates-wrap').style.display = 'none';
   document.getElementById('xrd-selected-wrap').style.display = 'none';
   document.getElementById('xrd-candidate-list').innerHTML = '';
