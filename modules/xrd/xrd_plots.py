@@ -136,7 +136,15 @@ def make_xrd_plot(result, metadata, output_path, theme=None):
     # canvas so downstream software never has to stretch the export.
     extra_rows = max(n_phases - 2, 0)
     figure_height = min(4.95, 4.45 + 0.16 * extra_rows)
-    tick_height = max(1.55, 0.64 * max(n_phases, 1))
+    # Each reflection row includes a heading above the rotated Miller indices.
+    # Reserve physical space so adding phases cannot squeeze their text together.
+    show_figure_title = metadata.get('show_figure_title', True)
+    top_margin = 0.925 if show_figure_title else 0.975
+    usable_fraction = (top_margin - 0.045) * 4 / (4 + 3 * 0.035)
+    reflection_inches = 0.56 * max(n_phases, 1)
+    figure_height = max(figure_height, (reflection_inches + 2.25) / usable_fraction)
+    usable_inches = figure_height * usable_fraction
+    tick_height = max(1.55, 6.55 * reflection_inches / (usable_inches - reflection_inches))
 
     fig = plt.figure(figsize=(6.5, figure_height),
                      facecolor=palette['figure'])
@@ -221,7 +229,6 @@ def make_xrd_plot(result, metadata, output_path, theme=None):
         str(metadata.get('sample_id', 'Sample')).strip().replace('_', ' ')
         or 'Sample')
     title_fontsize = max(9.2, 12.4 - max(len(sample_label) - 42, 0) * 0.08)
-    show_figure_title = metadata.get('show_figure_title', True)
     if show_figure_title:
         ax_main.set_title(
             scientific_mathtext(sample_label, bold=True),
@@ -233,7 +240,7 @@ def make_xrd_plot(result, metadata, output_path, theme=None):
         bbox=dict(boxstyle='round,pad=0.30', fc=palette['stats_face'],
                   ec=grid_color, alpha=0.90, linewidth=0.7), zorder=8)
 
-    ax_main.set_ylabel('Intensity (arbitrary units)', fontsize=10.0,
+    ax_main.set_ylabel('Intensity (a.u.)', fontsize=10.0,
                        color=text_color)
     ax_main.set_ylim(bottom=0)
 
@@ -261,31 +268,24 @@ def make_xrd_plot(result, metadata, output_path, theme=None):
     )
     figure_legend.get_frame().set_linewidth(0.7)
 
-    # One spacious row per phase. Phase names live in the left gutter while
-    # the reflection marks occupy the lower part of each row and hkl labels
-    # sit above them. The slightly taller panel keeps all three elements
-    # visually separate at the final publication dimensions.
-    # Leave dedicated headroom above the first phase row so long, rotated
-    # Miller indices remain inside the reflection panel instead of being
-    # clipped by its upper boundary.
-    ax_ticks.set_ylim(0, max(n_phases, 1) + 0.38)
-    phase_label_positions = []
-    phase_label_texts = []
-    phase_label_colors = []
+    # Phase headings sit inside their rows, above the reflection labels.
+    # No phase text extends into the left gutter.
+    ax_ticks.set_ylim(0, max(n_phases, 1))
+    ax_ticks.set_yticks([])
     for index, phase in enumerate(phases):
         color = phase_colors[index % len(phase_colors)]
-        row_center = max(n_phases, 1) - index - 0.5
-        ax_ticks.hlines(row_center - 0.28, tt.min(), tt.max(),
+        row_bottom = max(n_phases, 1) - index - 1
+        ax_ticks.hlines(row_bottom + 0.10, tt.min(), tt.max(),
                         color=grid_color, linewidth=0.55, alpha=0.65)
         labeled_positions = set()
         for reflection in phase.get('tick_reflections', []) or []:
             position = float(reflection['two_theta'])
             label = reflection.get('label') or ''
-            ax_ticks.vlines(position, row_center - 0.28, row_center - 0.04,
+            ax_ticks.vlines(position, row_bottom + 0.10, row_bottom + 0.32,
                             color=color, linewidth=1.45, alpha=1.0)
             if label:
                 ax_ticks.text(
-                    position, row_center + 0.015, _mathtext_scientific_label(label),
+                    position, row_bottom + 0.36, _mathtext_scientific_label(label),
                     ha='center', va='bottom', rotation=60,
                     rotation_mode='anchor',
                     fontsize=7.0,
@@ -293,24 +293,17 @@ def make_xrd_plot(result, metadata, output_path, theme=None):
             labeled_positions.add(round(position, 3))
         for position in phase.get('tick_positions', []) or []:
             if round(float(position), 3) not in labeled_positions:
-                ax_ticks.vlines(float(position), row_center - 0.28,
-                                row_center - 0.04, color=color,
+                ax_ticks.vlines(float(position), row_bottom + 0.10,
+                                row_bottom + 0.32, color=color,
                                 linewidth=1.45, alpha=1.0)
         phase_label = phase.get('tick_label') or clean_descriptive_text(
             phase.get('name', ''), fallback=f"Phase {index + 1}")
-        phase_label_positions.append(row_center)
-        phase_label_texts.append(_mathtext_scientific_label(
-            _phase_axis_label(phase_label), bold=True))
-        phase_label_colors.append(color)
-
-    ax_ticks.set_yticks(phase_label_positions, labels=phase_label_texts)
-    ax_ticks.tick_params(axis='y', length=0, pad=5, labelsize=7.5)
-    for tick_label, color in zip(ax_ticks.get_yticklabels(),
-                                 phase_label_colors):
-        tick_label.set_color(color)
-        tick_label.set_fontweight('bold')
-        tick_label.set_ha('right')
-        tick_label.set_linespacing(0.9)
+        ax_ticks.text(
+            0.5, row_bottom + 0.96, _mathtext_scientific_label(
+                _phase_axis_label(phase_label), bold=True),
+            transform=ax_ticks.get_yaxis_transform(), ha='center', va='top',
+            fontsize=7.5, fontweight='bold', linespacing=0.9,
+            color=color, clip_on=True)
 
     ax_res.plot(tt, resid, color=palette['residual'], linewidth=0.95,
                 alpha=1.0)
@@ -321,15 +314,18 @@ def make_xrd_plot(result, metadata, output_path, theme=None):
     ax_res.fill_between(tt, resid, 0, where=(resid < 0),
                         color=phase_colors[0], alpha=0.20)
     ax_res.set_ylabel('Difference', fontsize=9.0, color=text_color)
-    ax_res.yaxis.set_label_coords(-0.085, 0.42)
+    ax_res.tick_params(axis='y', labelsize=8.0)
+    for axis in (ax_main, ax_res):
+        axis.yaxis.set_label_coords(-0.085, 0.5)
+        axis.yaxis.label.set_verticalalignment('center')
 
     two_theta_ticks = _inclusive_two_theta_ticks(tt.min(), tt.max())
     ax_main.set_xlim(two_theta_ticks[0], two_theta_ticks[-1])
     ax_main.set_xticks(two_theta_ticks)
     ax_main.xaxis.set_major_formatter(
         FuncFormatter(lambda value, _position: f'{value:.0f}'))
-    fig.subplots_adjust(left=0.14, right=0.985, bottom=0.045,
-                        top=0.925 if show_figure_title else 0.975)
+    fig.subplots_adjust(left=0.11, right=0.985, bottom=0.045,
+                        top=top_margin)
 
     fig.savefig(
         output_path, dpi=300, facecolor=palette['figure'], edgecolor='none',
@@ -353,7 +349,7 @@ def make_candidate_preview(tt, y_obs, candidates, wavelength, output_path):
     ax.tick_params(colors='#e6edf3', labelsize=8)
     ax.set_xlabel('Diffraction angle, 2θ (degrees)', fontsize=9,
                   color='#e6edf3')
-    ax.set_ylabel('Intensity (arbitrary units)', fontsize=9, color='#e6edf3')
+    ax.set_ylabel('Intensity (a.u.)', fontsize=9, color='#e6edf3')
     for spine in ax.spines.values():
         spine.set_edgecolor('#2d333b')
     ax.grid(True, color='#2d333b', alpha=0.4, linewidth=0.5)
