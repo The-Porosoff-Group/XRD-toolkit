@@ -53,6 +53,11 @@ The first launch creates a local Python environment and installs dependencies. G
   crystallite size, microstrain, preferred-orientation value, and cell-change
   percentages relative to the exact prepared GSAS CIF
 
+Figure exports use Arial for text, subscripts, and crystallographic overbars.
+Install Arial on the computer generating the figures; the font is not bundled.
+If unavailable, exports warn and use Liberation Sans, then DejaVu Sans. Existing
+PNGs keep their original typography until regenerated.
+
 ## Recommended Workflow
 
 Raw scans, generated results, and `xrd_refinement_presets.json` are local user
