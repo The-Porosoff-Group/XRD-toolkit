@@ -9,6 +9,7 @@ from matplotlib.patches import Patch
 from matplotlib.ticker import FuncFormatter, MaxNLocator
 import numpy as np
 
+from modules.plot_style import arial_plot, scientific_mathtext
 from .presentation import (
     clean_descriptive_text,
     enrich_phase_results,
@@ -63,6 +64,11 @@ def _phase_axis_label(label):
     return str(label or '').strip()
 
 
+def _mathtext_scientific_label(label, *, bold=False):
+    """Typeset the explicit subscripts/bars from XRD presentation metadata."""
+    return scientific_mathtext(label, bold=bold, recognize_formulas=False)
+
+
 def _inclusive_two_theta_ticks(lower, upper):
     """Return whole-degree major ticks enclosing both data limits."""
     lower = float(lower)
@@ -91,6 +97,7 @@ def _inclusive_two_theta_ticks(lower, upper):
         ([display_lower], interior, [display_upper])))
 
 
+@arial_plot
 def make_xrd_plot(result, metadata, output_path, theme=None):
     """Render a fitted XRD pattern at its intended publication dimensions.
 
@@ -217,7 +224,8 @@ def make_xrd_plot(result, metadata, output_path, theme=None):
     show_figure_title = metadata.get('show_figure_title', True)
     if show_figure_title:
         ax_main.set_title(
-            sample_label, loc='center', pad=7, fontsize=title_fontsize,
+            scientific_mathtext(sample_label, bold=True),
+            loc='center', pad=7, fontsize=title_fontsize,
             color=text_color, fontweight='bold')
     ax_main.text(
         0.995, 0.985, stats_text, transform=ax_main.transAxes,
@@ -241,7 +249,7 @@ def make_xrd_plot(result, metadata, output_path, theme=None):
         color = phase_colors[index % len(phase_colors)]
         legend_handles.append(Patch(
             facecolor=color, edgecolor=color, alpha=0.70,
-            label=phase['legend_label']))
+            label=_mathtext_scientific_label(phase['legend_label'])))
     figure_legend = ax_main.legend(
         handles=legend_handles, fontsize=8.2,
         ncol=1,
@@ -277,7 +285,7 @@ def make_xrd_plot(result, metadata, output_path, theme=None):
                             color=color, linewidth=1.45, alpha=1.0)
             if label:
                 ax_ticks.text(
-                    position, row_center + 0.015, label,
+                    position, row_center + 0.015, _mathtext_scientific_label(label),
                     ha='center', va='bottom', rotation=60,
                     rotation_mode='anchor',
                     fontsize=7.0,
@@ -291,7 +299,8 @@ def make_xrd_plot(result, metadata, output_path, theme=None):
         phase_label = phase.get('tick_label') or clean_descriptive_text(
             phase.get('name', ''), fallback=f"Phase {index + 1}")
         phase_label_positions.append(row_center)
-        phase_label_texts.append(_phase_axis_label(phase_label))
+        phase_label_texts.append(_mathtext_scientific_label(
+            _phase_axis_label(phase_label), bold=True))
         phase_label_colors.append(color)
 
     ax_ticks.set_yticks(phase_label_positions, labels=phase_label_texts)
@@ -336,6 +345,7 @@ def make_xrd_plot(result, metadata, output_path, theme=None):
     return output_path
 
 
+@arial_plot
 def make_candidate_preview(tt, y_obs, candidates, wavelength, output_path):
     """Render the pre-refinement candidate stick-pattern preview."""
     fig, ax = plt.subplots(figsize=(12, 5), facecolor='#0d1117')
@@ -356,7 +366,8 @@ def make_candidate_preview(tt, y_obs, candidates, wavelength, output_path):
         for stick in candidate.get('stick_pattern', []):
             ax.axvline(stick['two_theta'], color=color, linewidth=0.8,
                        alpha=0.5, linestyle='--', ymin=0, ymax=0.15)
-        formula = format_chemical_formula(candidate.get('formula', '?'))
+        formula = _mathtext_scientific_label(
+            format_chemical_formula(candidate.get('formula', '?')))
         ax.text(
             0.01 + index * 0.16, 0.97, f"●  {formula}",
             transform=ax.transAxes, ha='left', va='top', fontsize=7,
