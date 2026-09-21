@@ -565,9 +565,12 @@ def _write_summary_xlsx(result, metadata, method_label, output_dir):
         ('weight_fraction_sigma_propagated_%', 'Weight fraction propagated sigma (%)'),
         ('weight_fraction_systematic_floor_%', 'Weight fraction systematic floor (%)'),
         ('weight_fraction_method', 'Weight fraction method'),
-        ('integrated_phase_fraction_%', 'Integrated phase fraction (%)'),
-        ('integrated_minus_weight_fraction_pp', 'Integrated - wt fraction (percentage points)'),
-        ('integrated_phase_fraction_method', 'Integrated phase fraction method'),
+        ('weight_fraction_basis', 'Weight fraction basis'),
+        ('weight_fraction_note', 'Weight fraction note'),
+        ('integrated_phase_fraction_%', 'Diffraction area fraction (%)'),
+        ('integrated_minus_weight_fraction_pp', 'Diffraction area - weight fraction (percentage points)'),
+        ('integrated_phase_fraction_method', 'Diffraction area fraction method'),
+        ('integrated_phase_fraction_note', 'Diffraction area fraction note'),
         *size_rows,
         ('microstrain_microstrain', 'Microstrain (microstrain)'),
         ('microstrain_source', 'Microstrain source'),
@@ -877,7 +880,12 @@ def run(filepath, output_dir, metadata, params):
                               f"(profile collapsed: Y={_y_val}, W={_w_val})",
                               flush=True)
                         continue
-                    _wt = max(float(_pr.get('weight_fraction_%', 1)), 0.1)
+                    # Profile averaging only needs a relative contribution;
+                    # legacy fits do not provide validated mass fractions.
+                    _profile_weight = _pr.get('weight_fraction_%')
+                    if _profile_weight is None:
+                        _profile_weight = _pr.get('integrated_phase_fraction_%')
+                    _wt = max(float(_profile_weight if _profile_weight is not None else 1), 0.1)
                     _total_wt += _wt
                     # In-house Rietveld stores U/V/W in deg², X/Y in deg.
                     # Convert to GSAS-II units: centideg² and centideg.
@@ -889,7 +897,7 @@ def run(filepath, output_dir, metadata, params):
                     print(f"    Phase '{_pr.get('name', '?')}': "
                           f"U={_pr.get('U')}, V={_pr.get('V')}, "
                           f"W={_pr.get('W')}, X={_pr.get('X')}, "
-                          f"Y={_pr.get('Y')} (wt={_wt:.1f}%)",
+                          f"Y={_pr.get('Y')} (profile weight={_wt:.1f})",
                           flush=True)
 
                 if _total_wt > 0:

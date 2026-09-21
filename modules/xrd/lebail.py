@@ -20,10 +20,10 @@ from .crystallography import (
     generate_reflections, chebyshev_background,
     caglioti_fwhm, tch_fwhm_eta, scherrer_size, size_from_Y,
     pseudo_voigt,
-    compute_fit_statistics, d_spacing, cell_volume,
+    compute_fit_statistics, d_spacing,
     generate_reflections_rietveld, compute_rietveld_intensities,
     structure_factor_sq_dw, parse_cif as _parse_cif_cryst,
-    molar_mass_from_formula, expand_sites_from_cif,
+    expand_sites_from_cif,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -133,7 +133,7 @@ def seed_I_hkl_from_pymatgen(refs, intensity_map, tt_r, y_r, bg_est):
 def _get_profiles(tt_arr, refs, U, V, W, eta, zero=0.0, X=0.0, Y=0.0,
                    window_factor=15.0):
     """
-    Unit-normalised pseudo-Voigt profiles, one per reflection.
+    Unit-peak-height pseudo-Voigt profiles, one per reflection.
 
     If X or Y are non-zero, uses Thompson-Cox-Hastings (TCH) model where
     eta is computed per-peak from Gaussian (U,V,W) and Lorentzian (X,Y)
@@ -177,6 +177,23 @@ def _get_profiles(tt_arr, refs, U, V, W, eta, zero=0.0, X=0.0, Y=0.0,
         profiles[k] = prof
 
     return profiles
+
+
+def _integrated_phase_fractions(tt, patterns):
+    """Return fitted intensity-area shares, never quantitative mass fractions."""
+    # Integrate against 2theta so irregularly spaced measurements do not bias
+    # the diagnostic toward densely sampled peaks. Patterns exclude background
+    # and use the same profile windows as the fit, not the shortened display.
+    widths = np.diff(np.asarray(tt, dtype=float))
+    areas = []
+    for pattern in patterns:
+        values = np.asarray(pattern, dtype=float)
+        area = float(np.sum(0.5 * (values[1:] + values[:-1]) * widths))
+        areas.append(max(area, 0.0) if np.isfinite(area) else 0.0)
+    total = sum(areas)
+    if total <= 0:
+        return [None] * len(areas)
+    return [round(100.0 * area / total, 1) for area in areas]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -685,41 +702,19 @@ def run_lebail(tt, y_obs, sigma, phases, wavelength,
     phase_patterns = []
     phase_results  = []
 
-    # ── Weight fractions via Hill & Howard (1987) ────────────────────────
-    # W_α = S_α · Z_α · M_α · V_α  /  Σ_i(S_i · Z_i · M_i · V_i)
-    # If Z or M are unavailable for any phase, fall back to S·V² (area-based).
-    zmv_values = []
-    use_zmv = True
+    # Le Bail reflection intensities are free parameters, so S is not an
+    # absolute structure-factor scale suitable for mass quantification.
+    intensity_patterns = []
     for st in phase_state:
-        ph = st['ph']
-        a_ = float(ph.get('a', 4.0))
-        b_ = float(ph.get('b') or a_)
-        c_ = float(ph.get('c') or a_)
-        al_ = float(ph.get('alpha', 90.0) or 90.0)
-        be_ = float(ph.get('beta',  90.0) or 90.0)
-        ga_ = float(ph.get('gamma', 90.0) or 90.0)
-        V = cell_volume(a_, b_, c_, al_, be_, ga_)
-        Z = ph.get('Z')
-        M = molar_mass_from_formula(ph.get('formula', ''))
-        if Z and M:
-            zmv_values.append(float(st['S']) * float(Z) * float(M) * V)
-        else:
-            use_zmv = False
-            break
-
-    if not use_zmv:
-        # Fallback: use integrated pattern areas (semi-quantitative)
-        zmv_values = []
-        for st in phase_state:
-            profs_tmp = _get_profiles(tt_r, st['refs'],
-                                       st['U'], st['V'], st['W'],
-                                       st.get('eta', 0.5), zero,
-                                       st['X'], st['Y'])
-            area = st['S'] * sum(st['I_hkl'][k] * profs_tmp[k].sum()
-                                 for k in range(len(st['refs'])))
-            zmv_values.append(float(area))
-
-    total_zmv = sum(zmv_values) or 1e-10
+        profiles = _get_profiles(tt_r, st['refs'],
+                                 st['U'], st['V'], st['W'],
+                                 st.get('eta', 0.5), zero,
+                                 st['X'], st['Y'])
+        pattern = np.zeros(len(tt_r))
+        for intensity, profile in zip(st['I_hkl'], profiles):
+            pattern += st['S'] * intensity * profile
+        intensity_patterns.append(pattern)
+    intensity_fractions = _integrated_phase_fractions(tt_r, intensity_patterns)
 
     for i_ph, st in enumerate(phase_state):
         # Use tight profiles (3× FWHM) for display to prevent Lorentzian
@@ -756,8 +751,6 @@ def run_lebail(tt, y_obs, sigma, phases, wavelength,
         fwhm_sc, eta_sc = tch_fwhm_eta(strongest_tt, st['U'], st['V'],
                                          st['W'], st['X'], st['Y'])
 
-        wt_frac = (zmv_values[i_ph] / total_zmv) * 100
-
         _sg_sym_r  = (ph.get('spacegroup', '') or
                       f"SG{ph.get('spacegroup_number', 1)}")
         _base_r    = ph.get('name') or ph.get('formula') or f'Phase {i_ph+1}'
@@ -785,7 +778,14 @@ def run_lebail(tt, y_obs, sigma, phases, wavelength,
             'fwhm_deg':          round(fwhm_sc, 4),
             'crystallite_size_A':  round(cryst_A, 1) if cryst_A else None,
             'crystallite_size_nm': round(cryst_A/10, 2) if cryst_A else None,
-            'weight_fraction_%':   round(wt_frac, 1),
+            'weight_fraction_%':   None,
+            'weight_fraction_method': 'unavailable_lebail_free_intensities',
+            'weight_fraction_note': (
+                'Le Bail fits free reflection intensities, so its phase scales '
+                'do not determine mass fractions. Use GSAS-II Rietveld '
+                'refinement for weight fractions.'),
+            'integrated_phase_fraction_%': intensity_fractions[i_ph],
+            'integrated_phase_fraction_method': 'integrated_fitted_phase_intensity_area',
             'n_reflections':       len(st['refs']),
             'tick_positions':      [
                 reflection['two_theta'] for reflection in tick_reflections],
@@ -1174,40 +1174,22 @@ def run_rietveld(tt, y_obs, sigma, phases, wavelength,
     phase_patterns = []
     phase_results  = []
 
-    # ── Weight fractions via Hill & Howard (1987) ────────────────────────
-    zmv_values_r = []
-    use_zmv_r = True
+    # The legacy model uses unit-peak-height profiles rather than unit-area
+    # profiles. Its scales depend on peak width and are not supported as
+    # quantitative mass scales. Keep fitted intensity areas as a diagnostic.
+    intensity_patterns = []
     for st in phase_state:
-        ph = st['ph']
-        a_ = float(ph.get('a', 4.0))
-        b_ = float(ph.get('b') or a_)
-        c_ = float(ph.get('c') or a_)
-        al_ = float(ph.get('alpha', 90.0) or 90.0)
-        be_ = float(ph.get('beta',  90.0) or 90.0)
-        ga_ = float(ph.get('gamma', 90.0) or 90.0)
-        V = cell_volume(a_, b_, c_, al_, be_, ga_)
-        Z = ph.get('Z')
-        M = molar_mass_from_formula(ph.get('formula', ''))
-        if Z and M:
-            zmv_values_r.append(float(st['S']) * float(Z) * float(M) * V)
-        else:
-            use_zmv_r = False
-            break
-
-    if not use_zmv_r:
-        zmv_values_r = []
-        for st in phase_state:
-            I_hkl_tmp = compute_rietveld_intensities(
-                st['refs'], st['sites'], {'_all': st['B_iso']})
-            profs_tmp = _get_profiles(tt_r, _refs_to_legacy(st['refs']),
-                                       st['U'], st['V'], st['W'],
-                                       st.get('eta', 0.5), zero,
-                                       st['X'], st['Y'])
-            area = st['S'] * sum(
-                I_hkl_tmp[k] * profs_tmp[k].sum() for k in range(len(st['refs'])))
-            zmv_values_r.append(float(area))
-
-    total_zmv_r = sum(zmv_values_r) or 1e-10
+        intensities = compute_rietveld_intensities(
+            st['refs'], st['sites'], {'_all': st['B_iso']})
+        profiles = _get_profiles(tt_r, _refs_to_legacy(st['refs']),
+                                 st['U'], st['V'], st['W'],
+                                 st.get('eta', 0.5), zero,
+                                 st['X'], st['Y'])
+        pattern = np.zeros(len(tt_r))
+        for intensity, profile in zip(intensities, profiles):
+            pattern += st['S'] * intensity * profile
+        intensity_patterns.append(pattern)
+    intensity_fractions = _integrated_phase_fractions(tt_r, intensity_patterns)
 
     for i_ph, st in enumerate(phase_state):
         I_hkl = compute_rietveld_intensities(
@@ -1246,8 +1228,6 @@ def run_rietveld(tt, y_obs, sigma, phases, wavelength,
         fwhm_sc, eta_sc = tch_fwhm_eta(strongest_tt, st['U'], st['V'],
                                          st['W'], st['X'], st['Y'])
 
-        wt_frac = (zmv_values_r[i_ph] / total_zmv_r) * 100
-
         _sg_sym_rv  = (ph.get('spacegroup', '') or
                        f"SG{ph.get('spacegroup_number', 1)}")
         _base_rv    = ph.get('name') or ph.get('formula') or f'Phase {i_ph+1}'
@@ -1275,7 +1255,14 @@ def run_rietveld(tt, y_obs, sigma, phases, wavelength,
             'fwhm_deg':          round(fwhm_sc, 4),
             'crystallite_size_A':  round(cryst_A, 1) if cryst_A else None,
             'crystallite_size_nm': round(cryst_A/10, 2) if cryst_A else None,
-            'weight_fraction_%':   round(wt_frac, 1),
+            'weight_fraction_%':   None,
+            'weight_fraction_method': 'unavailable_legacy_profile_normalization',
+            'weight_fraction_note': (
+                'Legacy Rietveld uses peak-height-normalized profiles; '
+                'quantitative mass fractions are not supported. Use GSAS-II '
+                'Rietveld refinement for weight fractions.'),
+            'integrated_phase_fraction_%': intensity_fractions[i_ph],
+            'integrated_phase_fraction_method': 'integrated_fitted_phase_intensity_area',
             'n_reflections':       len(st['refs']),
             'tick_positions':      [
                 reflection['two_theta'] for reflection in tick_reflections],

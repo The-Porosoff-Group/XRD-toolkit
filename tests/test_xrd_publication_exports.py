@@ -119,6 +119,31 @@ class XrdPublicationExportTests(unittest.TestCase):
             '2026-08-15_β-Mo2C_350C',
         )
 
+    def test_exports_keep_mass_and_diffraction_area_separate(self):
+        from modules.xrd.quantification import attach_phase_area_diagnostics
+
+        result = publication_result()
+        result['phase_results'][0]['weight_fraction_%'] = 25.
+        result['phase_results'][1]['weight_fraction_%'] = 75.
+        attach_phase_area_diagnostics(
+            result['phase_results'], [0., 1., 2.],
+            [[4., 4., 4.], [1., 1., 1.]], 'gsasii_isolation')
+        for phase, mass in zip(result['phase_results'], (25., 75.)):
+            self.assertIn(f'{mass} ± 1.2 wt. %', phase_legend_label(phase))
+        with tempfile.TemporaryDirectory() as directory:
+            path = _write_summary_xlsx(result, {'sample_id': 'fraction_check'}, 'GSAS-II', directory)
+            workbook = load_workbook(path, read_only=True, data_only=True)
+            try:
+                rows = {row[0]: row[1:] for row in
+                        workbook['Summary'].iter_rows(values_only=True)}
+                self.assertEqual(rows['Weight fraction (%)'], (25., 75.))
+                self.assertEqual(rows['Weight fraction ± (%)'], (1.2, 1.2))
+                area_row = next(values for label, values in rows.items()
+                                if label and label.startswith('Diffraction area fraction ('))
+                self.assertEqual(area_row, (80., 20.))
+            finally:
+                workbook.close()
+
     def test_light_and_dark_figures_are_compact_300_dpi_landscape(self):
         metadata = {
             'sample_id': 'β-Mo2C_350C',
