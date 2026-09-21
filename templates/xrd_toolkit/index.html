@@ -2892,6 +2892,12 @@ function summarizeResultForPreset(data) {
       weight_fraction_pct: ph['weight_fraction_%'],
       weight_fraction_err_pct: ph['weight_fraction_err_%'],
       weight_fraction_err_source: ph.weight_fraction_err_source,
+      weight_fraction_method: ph.weight_fraction_method,
+      weight_fraction_basis: ph.weight_fraction_basis,
+      weight_fraction_note: ph.weight_fraction_note,
+      diffraction_area_fraction_pct: ph['integrated_phase_fraction_%'],
+      integrated_phase_fraction_method: ph.integrated_phase_fraction_method,
+      integrated_phase_fraction_note: ph.integrated_phase_fraction_note,
       crystallite_size_nm: ph.crystallite_size_nm,
       crystallite_size_source: ph.crystallite_size_source,
       microstrain_microstrain: ph.microstrain_microstrain,
@@ -3240,6 +3246,14 @@ function fmtResultValue(v, digits = 3) {
   return Number(n.toFixed(digits)).toString();
 }
 
+function xrdWeightFractionHtml(ph, digits = 2) {
+  const weight = _fitNum(ph['weight_fraction_%']);
+  if (weight === null) return 'n/a';
+  const uncertainty = _fitNum(ph['weight_fraction_err_%']);
+  const errorText = uncertainty === null ? '' : ` &plusmn; ${fmtResultValue(uncertainty, 2)}`;
+  return `${fmtResultValue(weight, digits)}${errorText}%`;
+}
+
 function fmtPhaseAxis(axis) {
   if (Array.isArray(axis)) return axis.join(' ');
   return String(axis || '').trim();
@@ -3301,10 +3315,7 @@ function renderReusableFitParameters(data) {
     const microstrainSource = ph.microstrain_source
       ? ` (${escHtml(String(ph.microstrain_source).replace(/_/g, ' '))})`
       : '';
-    const wtErr = ph['weight_fraction_err_%'] != null
-      ? ` &plusmn; ${fmtResultValue(ph['weight_fraction_err_%'], 2)}`
-      : '';
-    const wtSource = ph.weight_fraction_err_source
+    const wtSource = _fitNum(ph['weight_fraction_%']) !== null && ph.weight_fraction_err_source
       ? ` (${escHtml(String(ph.weight_fraction_err_source).replace(/_/g, ' '))})`
       : '';
     const cellBits = [];
@@ -3338,8 +3349,9 @@ function renderReusableFitParameters(data) {
           <div class="reuse-value">${microstrainLine}${microstrainSource}</div>
         </div>
         <div class="reuse-metric">
-          <div class="reuse-label">Wt% uncertainty</div>
-          <div class="reuse-value">${fmtResultValue(ph['weight_fraction_%'], 1)}${wtErr}%${wtSource}</div>
+          <div class="reuse-label">Wt% with uncertainty</div>
+          <div class="reuse-value">${xrdWeightFractionHtml(ph, 1)}${wtSource}</div>
+          ${ph.weight_fraction_note ? `<div class="hint">${escHtml(ph.weight_fraction_note)}</div>` : ''}
         </div>
       </div>
     </div>`;
@@ -3370,6 +3382,7 @@ function renderFitWarnings(data) {
 }
 
 function _fitNum(v) {
+  if (v === null || v === undefined || v === '') return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
@@ -3807,7 +3820,7 @@ function showXRDResults(data) {
 
   // Phase results
   const pr = document.getElementById('xrd-phase-results');
-  pr.innerHTML = '';
+  pr.innerHTML = '<div class="hint" style="margin-bottom:10px;">Wt% is mass normalized over the modeled crystalline phases; amorphous material and unmodeled phases are excluded. Diffraction area is an intensity diagnostic, not a weight percentage.</div>';
   (data.phase_results || []).forEach((ph, i) => {
     const c = (xrdPhases[i] && xrdPhases[i]._plot_color) || PHASE_COLORS[i % PHASE_COLORS.length];
     const fwhmRef = Number(ph.fwhm_reference_two_theta);
@@ -3819,16 +3832,22 @@ function showXRDResults(data) {
     const microstrainHtml = ph.microstrain_microstrain != null
       ? `<div><span style="color:var(--muted);">Microstrain = </span>${fmtResultValue(ph.microstrain_microstrain, 1)} microstrain${ph.microstrain_source ? ` <span style="color:var(--muted);font-size:10px;">(${escHtml(String(ph.microstrain_source).replace(/_/g, ' '))})</span>` : ''}</div>`
       : '';
-    const wtErrSource = ph.weight_fraction_err_source
+    const hasWeight = _fitNum(ph['weight_fraction_%']) !== null;
+    const wtErrSource = hasWeight && ph.weight_fraction_err_source
       ? ` title="Uncertainty source: ${String(ph.weight_fraction_err_source).replace(/"/g, '&quot;')}"`
       : '';
     const wtSourceText = [
       ph.weight_fraction_method ? String(ph.weight_fraction_method).replace(/_/g, ' ') : null,
-      ph.weight_fraction_err_source ? `err ${String(ph.weight_fraction_err_source).replace(/_/g, ' ')}` : null,
+      hasWeight && ph.weight_fraction_err_source ? `err ${String(ph.weight_fraction_err_source).replace(/_/g, ' ')}` : null,
     ].filter(Boolean).join('; ');
     const wtSource = wtSourceText
-      ? ` <span style="color:var(--muted);font-size:10px;">(${wtSourceText})</span>`
+      ? ` <span style="color:var(--muted);font-size:10px;">(${escHtml(wtSourceText)})</span>`
       : '';
+    const areaSourceText = [
+      ph.integrated_phase_fraction_method ? String(ph.integrated_phase_fraction_method).replace(/_/g, ' ') : null,
+      ph.integrated_phase_fraction_note,
+    ].filter(Boolean).join('; ');
+    const areaSource = areaSourceText ? ` title="${escHtml(areaSourceText)}"` : '';
     const cellDeltaParts = [];
     if (ph.delta_volume_pct != null) cellDeltaParts.push(`ΔV/V0=${ph.delta_volume_pct}%`);
     if (ph.delta_a_pct != null) cellDeltaParts.push(`Δa/a0=${ph.delta_a_pct}%`);
@@ -3879,9 +3898,10 @@ function showXRDResults(data) {
           ${ph.Y != null ? `<div><span style="color:var(--muted);">Y = </span>${ph.Y} (size)</div>` : ''}
           ${ph.X != null ? `<div><span style="color:var(--muted);">X = </span>${ph.X} (strain)</div>` : ''}
           ${ph.scale_sigma != null ? `<div><span style="color:var(--muted);">Scale sigma = </span>${ph.scale_sigma}${ph['scale_sigma_rel_%'] != null ? ` (${ph['scale_sigma_rel_%']}%)` : ''}</div>` : ''}
-          ${ph['integrated_phase_fraction_%'] != null ? `<div><span style="color:var(--muted);">Integrated phase = </span>${ph['integrated_phase_fraction_%']}%</div>` : ''}
+          ${ph['integrated_phase_fraction_%'] != null ? `<div${areaSource}><span style="color:var(--muted);">Diffraction area = </span>${ph['integrated_phase_fraction_%']}%</div>` : ''}
           ${poResultHtml}
-          <div${wtErrSource}><span style="color:var(--muted);">Wt% = </span>${ph['weight_fraction_%']}${ph['weight_fraction_err_%'] != null ? ' ± ' + ph['weight_fraction_err_%'] : ''}%${wtSource}</div>
+          <div${wtErrSource}><span style="color:var(--muted);">Wt% = </span>${xrdWeightFractionHtml(ph)}${wtSource}</div>
+          ${ph.weight_fraction_note ? `<div class="hint" style="grid-column:1/-1;">${escHtml(ph.weight_fraction_note)}</div>` : ''}
           ${cellDeltaHtml}
         </div>
       </div>`;

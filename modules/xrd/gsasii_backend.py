@@ -32,6 +32,17 @@ SEPARATION RULE (refinement vs. display):
 import math, os, re, sys, tempfile, warnings
 import numpy as np
 
+try:
+    from .quantification import (
+        attach_phase_area_diagnostics, official_mass_fraction_uncertainties,
+        resolve_mass_fractions,
+    )
+except ImportError:
+    from quantification import (
+        attach_phase_area_diagnostics, official_mass_fraction_uncertainties,
+        resolve_mass_fractions,
+    )
+
 
 class _IsolationSkipped(Exception):
     """Sentinel: phase isolation intentionally disabled."""
@@ -85,14 +96,14 @@ except ImportError:
 
 try:
     from .crystallography import (
-        compute_fit_statistics, cell_volume, molar_mass_from_formula,
+        compute_fit_statistics, cell_volume,
         tch_fwhm_eta, size_from_Y, scherrer_size,
         generate_reflections, parse_cif, caglioti_fwhm,
         expand_sites_from_cif, filter_reflections_by_relative_intensity,
     )
 except ImportError:
     from crystallography import (
-        compute_fit_statistics, cell_volume, molar_mass_from_formula,
+        compute_fit_statistics, cell_volume,
         tch_fwhm_eta, size_from_Y, scherrer_size,
         generate_reflections, parse_cif, caglioti_fwhm,
         expand_sites_from_cif, filter_reflections_by_relative_intensity,
@@ -4274,77 +4285,42 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         #   W_alpha = Scale_alpha * Mass_alpha / sum(Scale_i * Mass_i)
         # where General['Mass'] is the phase unit-cell mass.
         raw_scales = {}
-        try:
-            for phase_obj in gsas_phases:
-                hapData = list(phase_obj.data['Histograms'].values())[0]
-                scale_entry = hapData.get('Scale', [1.0])
-                scale_val = scale_entry[0] if isinstance(scale_entry, (list, tuple)) else float(scale_entry)
-                raw_scales[phase_obj.name] = scale_val
-        except Exception as e:
-            warnings.warn(f"GSAS-II: could not read scale factors: {e}")
-
-        mass_weighted_values = {}
-        use_mass_weighting = True
-        for ph_input, phase_obj in zip(phases, gsas_phases):
-            S = raw_scales.get(phase_obj.name, 1.0)
-            phase_mass = None
+        unit_cell_masses = {}
+        for phase_obj in gsas_phases:
             try:
-                phase_mass = float(
-                    phase_obj.data.get('General', {}).get('Mass', 0.0))
-            except Exception:
-                phase_mass = None
-            # Fallback for unusual GSAS-II objects with no General['Mass'].
-            # Since GSAS-II Scale is a phase fraction, use unit-cell mass
-            # Z*M, not Z*M*V.
-            Z = ph_input.get('Z')
-            M = molar_mass_from_formula(ph_input.get('formula', ''))
-            if phase_mass and phase_mass > 0:
-                mass_weighted_values[phase_obj.name] = (
-                    float(S) * float(phase_mass))
-            elif Z and M:
-                mass_weighted_values[phase_obj.name] = (
-                    float(S) * float(Z) * float(M))
-            else:
-                use_mass_weighting = False
-                break
+                hap_data = list(phase_obj.data['Histograms'].values())[0]
+                scale_entry = hap_data.get('Scale')
+                raw_scales[phase_obj.name] = float(
+                    scale_entry[0] if isinstance(scale_entry, (list, tuple))
+                    else scale_entry)
+            except (KeyError, IndexError, TypeError, ValueError, OverflowError):
+                raw_scales[phase_obj.name] = None
+            unit_cell_masses[phase_obj.name] = (
+                phase_obj.data.get('General', {}).get('Mass'))
 
-        if not use_mass_weighting:
-            warnings.warn("GSAS-II: phase mass unavailable for one or more "
-                         "phases -- falling back to raw phase-fraction "
-                         "normalisation.")
-            mass_weighted_values = dict(raw_scales)
-
-        total_mass_weighted = sum(mass_weighted_values.values()) or 1e-10
-        print(f"GSAS-II scale factors: {raw_scales}", flush=True)
-        print(f"GSAS-II mass-weighted phase values: "
-              f"{mass_weighted_values}", flush=True)
-        print(f"GSAS-II use_mass_weighting: {use_mass_weighting}",
-              flush=True)
-
-        gsas_mass_fraction_pct = {}
-        gsas_mass_fraction_sigma_pct = {}
+        official_mass_fracs = None
         try:
             if hasattr(histogram, 'ComputeMassFracs'):
-                _gsas_mass_fracs = histogram.ComputeMassFracs()
-                for _ph_name, _mf_pair in (_gsas_mass_fracs or {}).items():
-                    if (_mf_pair is None or not isinstance(
-                            _mf_pair, (list, tuple)) or len(_mf_pair) < 2):
-                        continue
-                    gsas_mass_fraction_pct[_ph_name] = (
-                        float(_mf_pair[0]) * 100.0)
-                    gsas_mass_fraction_sigma_pct[_ph_name] = (
-                        float(_mf_pair[1]) * 100.0)
-                if gsas_mass_fraction_pct:
-                    print(f"GSAS-II ComputeMassFracs wt%: "
-                          f"{gsas_mass_fraction_pct}", flush=True)
-                    print(f"GSAS-II ComputeMassFracs sigma: "
-                          f"{gsas_mass_fraction_sigma_pct}", flush=True)
-        except Exception as _e:
-            print(f"GSAS-II ComputeMassFracs unavailable: {_e}",
-                  flush=True)
+                official_mass_fracs = histogram.ComputeMassFracs()
+        except Exception as exc:
+            print(f"GSAS-II ComputeMassFracs unavailable: {exc}", flush=True)
+        mass_result = resolve_mass_fractions(
+            [phase_obj.name for phase_obj in gsas_phases], raw_scales,
+            unit_cell_masses, official_mass_fracs)
+        mass_weighted_values = mass_result['mass_weighted_values']
+        total_mass_weighted = sum(mass_weighted_values.values())
+        gsas_mass_fraction_sigma_pct = mass_result['sigmas_pct']
+        _mass_warnings = []
+        if mass_result['method'] == 'unavailable':
+            _mass_warnings.append(mass_result['note'])
+            warnings.warn(f"GSAS-II: {mass_result['note']}")
+        print(f"GSAS-II scale factors: {raw_scales}", flush=True)
+        print(f"GSAS-II mass wt% ({mass_result['method']}): "
+              f"{mass_result['fractions_pct']}", flush=True)
 
         # Warn if all scale factors are identical (common with failed refinement)
-        scale_vals = list(raw_scales.values())
+        scale_vals = [value for value in raw_scales.values()
+                      if value is not None and math.isfinite(value)]
         if len(scale_vals) >= 2 and len(set(round(v, 6) for v in scale_vals)) == 1:
             warnings.warn("GSAS-II: all phase scale factors are identical — "
                          "refinement may not have converged properly.")
@@ -4423,15 +4399,13 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                 # Compute ∂W_α/∂S_i for each alpha, then propagate
                 for i_alpha, alpha in enumerate(phase_names):
                     P_alpha = mass_weighted_values[alpha]
-                    S_alpha = raw_scales.get(alpha, 1.0)
-                    K_alpha = P_alpha / S_alpha if S_alpha > 0 else 0.0
+                    K_alpha = float(unit_cell_masses[alpha])
 
                     # Build gradient vector dW_alpha/dS_i
                     grad = np.zeros(n_ph)
                     for i_beta, beta in enumerate(phase_names):
                         P_beta = mass_weighted_values[beta]
-                        S_beta = raw_scales.get(beta, 1.0)
-                        K_beta = P_beta / S_beta if S_beta > 0 else 0.0
+                        K_beta = float(unit_cell_masses[beta])
                         if beta == alpha:
                             grad[i_beta] = K_alpha * (T - P_alpha) / (T * T)
                         else:
@@ -4484,36 +4458,6 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                             wt_frac_sigma_sources[_binary_name] = (
                                 f'{_src}+binary_closure')
 
-                # Prefer GSAS-II's own formal mass-fraction sigma when it
-                # is available. This uses the same Scale*Mass normalization
-                # and covariance derivative as GSAS-II writes to its lst/CIF
-                # exports, including any supported phase-fraction constraints.
-                if gsas_mass_fraction_sigma_pct:
-                    for _gsas_name, _gsas_sigma in (
-                            gsas_mass_fraction_sigma_pct.items()):
-                        _mf_pct = gsas_mass_fraction_pct.get(_gsas_name)
-                        if _mf_pct is None:
-                            continue
-                        _sys_floor = max(1.0, 0.02 * float(_mf_pct))
-                        _sigma_w = max(float(_gsas_sigma), _sys_floor)
-                        wt_frac_propagated_sigmas[_gsas_name] = float(
-                            _gsas_sigma)
-                        wt_frac_systematic_floors[_gsas_name] = _sys_floor
-                        wt_frac_sigmas[_gsas_name] = _sigma_w
-                        _src = 'gsasii_calcMassFracs'
-                        if _sigma_w > float(_gsas_sigma) * 1.01:
-                            _src += '+systematic_floor'
-                        wt_frac_sigma_sources[_gsas_name] = _src
-                    if n_ph == 2 and len(wt_frac_sigmas) == 2:
-                        _binary_sigma = max(wt_frac_sigmas.values())
-                        for _binary_name in phase_names:
-                            wt_frac_sigmas[_binary_name] = _binary_sigma
-                            _src = wt_frac_sigma_sources.get(
-                                _binary_name, 'gsasii_calcMassFracs')
-                            if 'binary_closure' not in _src:
-                                wt_frac_sigma_sources[_binary_name] = (
-                                    f'{_src}+binary_closure')
-
                 print(f"  Weight fraction uncertainties: "
                       f"{{ {', '.join(f'{k}: ±{v:.2f}%' for k, v in wt_frac_sigmas.items())} }}",
                       flush=True)
@@ -4523,6 +4467,28 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         else:
             print("  Weight fraction uncertainties: not available "
                   "(need scale ESDs for ≥2 phases)", flush=True)
+
+        # Constraints can produce official mass ESDs even when no independent
+        # scale ESDs were extracted. Apply them independently of that fallback.
+        official_uncertainties = official_mass_fraction_uncertainties(
+            mass_result['fractions_pct'], gsas_mass_fraction_sigma_pct)
+        for phase_name, uncertainty in official_uncertainties.items():
+            wt_frac_sigmas[phase_name] = uncertainty['weight_fraction_err_%']
+            wt_frac_propagated_sigmas[phase_name] = (
+                uncertainty['weight_fraction_sigma_propagated_%'])
+            wt_frac_systematic_floors[phase_name] = (
+                uncertainty['weight_fraction_systematic_floor_%'])
+            wt_frac_sigma_sources[phase_name] = (
+                uncertainty['weight_fraction_err_source'])
+        # A partial official sigma result can replace only one fallback ESD.
+        # Restore binary closure after merging both uncertainty sources.
+        if len(gsas_phases) == 2 and len(wt_frac_sigmas) == 2:
+            binary_sigma = max(wt_frac_sigmas.values())
+            for phase_name in wt_frac_sigmas:
+                wt_frac_sigmas[phase_name] = binary_sigma
+                source = wt_frac_sigma_sources.get(phase_name, 'scale_covariance')
+                if 'binary_closure' not in source:
+                    wt_frac_sigma_sources[phase_name] = source + '+binary_closure'
 
         # ── Extract GSAS-II RefList for physics-based profile generation ────
         # The RefList contains GSAS-II's refined Fc² values for each reflection,
@@ -4720,26 +4686,19 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             fwhm_rep, eta_rep = tch_fwhm_eta(
                 fwhm_reference_two_theta, U_deg, V_deg, W_deg, X_deg, Y_deg)
 
-            # Weight fraction from GSAS-II phase fraction and phase mass.
-            scale_val = raw_scales.get(phase_obj.name, 1.0)
-            mass_weighted_val = mass_weighted_values.get(
-                phase_obj.name, scale_val)
-            if phase_obj.name in gsas_mass_fraction_pct:
-                wt_pct = gsas_mass_fraction_pct[phase_obj.name]
-                weight_fraction_method = 'gsasii_compute_mass_fracs'
-            else:
-                wt_pct = ((mass_weighted_val / total_mass_weighted) * 100
-                          if total_mass_weighted > 0 else 0)
-                weight_fraction_method = (
-                    'gsasii_mass_fraction'
-                    if use_mass_weighting else 'raw_phase_fraction_fallback')
+            # Quantitative mass results are fixed before display decomposition.
+            scale_val = raw_scales.get(phase_obj.name)
+            mass_weighted_val = mass_weighted_values.get(phase_obj.name)
+            wt_pct = mass_result['fractions_pct'][phase_obj.name]
+            weight_fraction_method = mass_result['method']
             wt_pct_err = wt_frac_sigmas.get(phase_obj.name)  # may be None
             wt_pct_err_source = wt_frac_sigma_sources.get(phase_obj.name)
             wt_pct_sigma_prop = wt_frac_propagated_sigmas.get(phase_obj.name)
             wt_pct_sys_floor = wt_frac_systematic_floors.get(phase_obj.name)
             scale_sigma = scale_sigmas.get(phase_obj.name)
             scale_sigma_rel_pct = None
-            if scale_sigma is not None and abs(float(scale_val)) > 1e-30:
+            if (scale_sigma is not None and scale_val is not None
+                    and math.isfinite(scale_val) and abs(scale_val) > 1e-30):
                 scale_sigma_rel_pct = (
                     abs(float(scale_sigma) / float(scale_val)) * 100.0)
 
@@ -4945,7 +4904,9 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                 'system':            (ph.get('system') or 'triclinic').lower(),
                 'spacegroup_number': ph.get('spacegroup_number', 1),
                 'spacegroup':        ph.get('spacegroup', ''),
-                'scale':             round(scale_val, 5),
+                'scale': (round(scale_val, 5)
+                          if scale_val is not None and math.isfinite(scale_val)
+                          else None),
                 'scale_sigma': (
                     round(scale_sigma, 8)
                     if scale_sigma is not None else None),
@@ -4955,8 +4916,10 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                 'scale_sigma_source': (
                     'gsas_covariance'
                     if scale_sigma is not None else 'not_available'),
-                'mass_weighted_scale': round(mass_weighted_val, 8),
-                'zmv_value':          round(mass_weighted_val, 8),
+                'mass_weighted_scale': (round(mass_weighted_val, 8)
+                                        if mass_weighted_val is not None else None),
+                'zmv_value': (round(mass_weighted_val, 8)
+                              if mass_weighted_val is not None else None),
                 'B_iso':             round(b_iso_avg, 4),
                 'U': round(U_deg, 5), 'V': round(V_deg, 5),
                 'W': round(W_deg, 5),
@@ -4992,9 +4955,9 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                     round(float(microstrain), 2)
                     if microstrain is not None else None),
                 'microstrain_source': microstrain_source,
-                'weight_fraction_%':       round(wt_pct, 1),
-                'gsasii_mass_weight_fraction_%': round(wt_pct, 1),
-                'hill_howard_weight_fraction_%': round(wt_pct, 1),
+                'weight_fraction_%':       round(wt_pct, 1) if wt_pct is not None else None,
+                'gsasii_mass_weight_fraction_%': round(wt_pct, 1) if wt_pct is not None else None,
+                'hill_howard_weight_fraction_%': round(wt_pct, 1) if wt_pct is not None else None,
                 'weight_fraction_err_%':   round(wt_pct_err, 2) if wt_pct_err is not None else None,
                 'weight_fraction_err_source': wt_pct_err_source,
                 'weight_fraction_sigma_propagated_%': (
@@ -5004,6 +4967,10 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                     round(wt_pct_sys_floor, 3)
                     if wt_pct_sys_floor is not None else None),
                 'weight_fraction_method': weight_fraction_method,
+                'weight_fraction_note': mass_result['note'],
+                'weight_fraction_basis': (
+                    'normalized_modeled_crystalline_mass'
+                    if wt_pct is not None else None),
                 'n_reflections':           len(tick_positions),
                 'tick_positions':      tick_positions,
                 'tick_reflections':    tick_reflections,
@@ -5016,13 +4983,9 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         # ycalc - background.  This uses GSAS-II's own profile
         # functions (correct peak shapes, asymmetry, everything).
         #
-        # ── Phase decomposition ─────────────────────────────────────────
-        # GSAS-II phase isolation is DISABLED for robustness.
-        # It used GSAS-II's internal RefList for per-phase patterns,
-        # which could disagree with the filtered Python reflection
-        # set used for ticks.  Instead, we always use manual profile
-        # reconstruction from all_phase_refs — same refs as ticks.
-        # This guarantees phase envelopes match tick positions.
+        # The decomposition determines display-area diagnostics only. Mass
+        # fractions and their uncertainties above never depend on this choice.
+        phase_pattern_method = 'unavailable'
 
         if len(gsas_phases) > 1:
             total_above_bg = np.maximum(y_calc_out - y_bg_out, 0.0)
@@ -5195,6 +5158,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                         ratio * total_above_bg, 0.0).tolist()
 
                 decomp_ok = True
+                phase_pattern_method = 'gsasii_phase_isolation'
                 print("  Phase isolation succeeded.", flush=True)
             except _IsolationSkipped:
                 phase_patterns = []  # silently skip to fallback
@@ -5270,7 +5234,9 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
 
                         scaled = []
                         for phase_obj, prof in zip(gsas_phases, raw_profiles):
-                            s = raw_scales.get(phase_obj.name, 1.0)
+                            s = raw_scales.get(phase_obj.name)
+                            if s is None or not math.isfinite(s) or s < 0.0:
+                                raise ValueError("Invalid phase scale for reconstruction")
                             scaled.append(prof * s)
 
                         sum_raw = np.zeros_like(tt_out, dtype=np.float64)
@@ -5287,6 +5253,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                                 np.maximum(
                                     ratio * total_above_bg, 0.0).tolist())
                         decomp_ok = True
+                        phase_pattern_method = 'reflection_profile_reconstruction'
                         print("  Profile reconstruction succeeded.",
                               flush=True)
                     except Exception as e_fc2:
@@ -5299,7 +5266,8 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                 warnings.warn(
                     "GSAS-II phase decomposition: both isolation and "
                     "profile reconstruction failed. Falling back to "
-                    "equal split — weight fractions will be UNRELIABLE.")
+                    "equal split for display-area diagnostics.")
+                phase_pattern_method = 'equal_split_display_fallback'
                 phase_patterns = []
                 for _ in gsas_phases:
                     share = (total_above_bg / len(gsas_phases)).tolist()
@@ -5313,151 +5281,16 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                       f"decomposition.", flush=True)
                 phase_patterns = []
                 decomp_ok = False
+                phase_pattern_method = 'unavailable'
 
-            # Integrated phase-pattern fractions are the primary reported
-            # phase fractions for this toolkit. They are computed from the
-            # isolated/refined calculated phase envelopes, which matches the
-            # FullProf-style independent integration workflow better than
-            # the GSAS-II Scale*Mass diagnostic for these mixed-phase data.
-            total_integ = sum(
-                np.sum(np.array(pp)) for pp in phase_patterns) or 1e-30
-            integrated_values = [
-                float(np.sum(np.array(pp))) for pp in phase_patterns]
-            integrated_sigmas = {}
-            integrated_sigma_sources = {}
-            try:
-                _phase_names_int = [po.name for po in gsas_phases]
-                _n_int = len(_phase_names_int)
-                _cov_int = np.zeros((_n_int, _n_int))
-                _have_full_cov_int = False
-                try:
-                    _cov_data_int = cov_data.get('covMatrix')
-                    if _cov_data_int is not None:
-                        _cov_data_int = np.array(_cov_data_int)
-                        _scale_indices_int = {}
-                        for _idx_int, _pname_int in enumerate(
-                                _phase_names_int):
-                            for _pattern_int in [
-                                    f'{_idx_int}:0:Scale',
-                                    f'{_idx_int}::Scale']:
-                                if _pattern_int in vary_list:
-                                    _scale_indices_int[_pname_int] = (
-                                        vary_list.index(_pattern_int))
-                                    break
-                            if _pname_int not in _scale_indices_int:
-                                for _vname_int in vary_list:
-                                    if (_vname_int.startswith(
-                                            f'{_idx_int}:')
-                                            and 'Scale' in _vname_int):
-                                        _scale_indices_int[_pname_int] = (
-                                            vary_list.index(_vname_int))
-                                        break
-                        if len(_scale_indices_int) == _n_int:
-                            for _ii, _name_i in enumerate(_phase_names_int):
-                                for _jj, _name_j in enumerate(_phase_names_int):
-                                    _cov_int[_ii, _jj] = float(
-                                        _cov_data_int[
-                                            _scale_indices_int[_name_i],
-                                            _scale_indices_int[_name_j]])
-                            _have_full_cov_int = True
-                except Exception as _e_int_cov:
-                    print(f"  Integrated fraction covariance extraction "
-                          f"failed: {_e_int_cov}", flush=True)
-                if not _have_full_cov_int:
-                    for _ii, _pname_int in enumerate(_phase_names_int):
-                        _sig_s = scale_sigmas.get(_pname_int, 0.0)
-                        _cov_int[_ii, _ii] = _sig_s ** 2
-
-                _T_int = total_integ
-                for _ia, _alpha in enumerate(_phase_names_int):
-                    _P_alpha = integrated_values[_ia]
-                    _S_alpha = raw_scales.get(_alpha, 1.0)
-                    _K_alpha = (_P_alpha / _S_alpha
-                                if abs(_S_alpha) > 1e-30 else 0.0)
-                    _grad_int = np.zeros(_n_int)
-                    for _ib, _beta in enumerate(_phase_names_int):
-                        _P_beta = integrated_values[_ib]
-                        _S_beta = raw_scales.get(_beta, 1.0)
-                        _K_beta = (_P_beta / _S_beta
-                                   if abs(_S_beta) > 1e-30 else 0.0)
-                        if _beta == _alpha:
-                            _grad_int[_ib] = (
-                                _K_alpha * (_T_int - _P_alpha)
-                                / (_T_int * _T_int))
-                        else:
-                            _grad_int[_ib] = (
-                                -_P_alpha * _K_beta
-                                / (_T_int * _T_int))
-                    _var_int = float(_grad_int @ _cov_int @ _grad_int)
-                    _sigma_prop = math.sqrt(max(_var_int, 0.0)) * 100.0
-                    _frac_pct = (_P_alpha / _T_int) * 100.0
-                    _sys_floor = max(1.0, 0.02 * _frac_pct)
-                    _sigma_rep = max(_sigma_prop, _sys_floor)
-                    integrated_sigmas[_alpha] = (
-                        _sigma_rep, _sigma_prop, _sys_floor)
-                    _src_int = ('integrated_phase_area_full_covariance'
-                                if _have_full_cov_int
-                                else 'integrated_phase_area_diagonal_covariance')
-                    if _sigma_rep > _sigma_prop * 1.01:
-                        _src_int += '+systematic_floor'
-                    integrated_sigma_sources[_alpha] = _src_int
-                if _n_int == 2 and len(integrated_sigmas) == 2:
-                    _binary_sigma_int = max(
-                        _v[0] for _v in integrated_sigmas.values())
-                    for _pname_int in _phase_names_int:
-                        _sig_tuple = integrated_sigmas[_pname_int]
-                        integrated_sigmas[_pname_int] = (
-                            _binary_sigma_int, _sig_tuple[1], _sig_tuple[2])
-                        if 'binary_closure' not in integrated_sigma_sources[
-                                _pname_int]:
-                            integrated_sigma_sources[_pname_int] += (
-                                '+binary_closure')
-            except Exception as _e_int:
-                print(f"  Integrated fraction uncertainty propagation "
-                      f"failed: {_e_int}", flush=True)
-            for i_wp, pp in enumerate(phase_patterns):
-                integ_frac = np.sum(np.array(pp)) / total_integ * 100
-                prior_wt_frac = (phase_results[i_wp]['weight_fraction_%']
-                                 if i_wp < len(phase_results) else None)
-                print(f"  Phase {i_wp}: "
-                      f"GSAS-II mass wt% = {prior_wt_frac}%, "
-                      f"integrated fraction = {integ_frac:.1f}%", flush=True)
-                if i_wp < len(phase_results):
-                    _pname_i = gsas_phases[i_wp].name
-                    _sig_i = integrated_sigmas.get(_pname_i)
-                    if _sig_i:
-                        phase_results[i_wp]['weight_fraction_err_%'] = (
-                            round(_sig_i[0], 2))
-                        phase_results[i_wp][
-                            'weight_fraction_sigma_propagated_%'] = (
-                                round(_sig_i[1], 3))
-                        phase_results[i_wp][
-                            'weight_fraction_systematic_floor_%'] = (
-                                round(_sig_i[2], 3))
-                        phase_results[i_wp]['weight_fraction_err_source'] = (
-                            integrated_sigma_sources.get(_pname_i))
-                    phase_results[i_wp]['gsasii_mass_weight_fraction_%'] = (
-                        prior_wt_frac)
-                    phase_results[i_wp]['weight_fraction_%'] = round(
-                        integ_frac, 1)
-                    phase_results[i_wp]['weight_fraction_method'] = (
-                        'integrated_phase_pattern_area')
-                    phase_results[i_wp]['integrated_phase_fraction_%'] = (
-                        round(integ_frac, 1))
-                    if prior_wt_frac is not None:
-                        phase_results[i_wp][
-                            'integrated_minus_weight_fraction_pp'] = (
-                                round(integ_frac - float(prior_wt_frac), 2))
-                        phase_results[i_wp][
-                            'integrated_minus_hh_fraction_pp'] = (
-                                round(integ_frac - float(prior_wt_frac), 2))
-                    phase_results[i_wp][
-                        'integrated_phase_fraction_method'] = (
-                            'primary_quant_from_refined_phase_envelope')
         else:
             # Single phase — entire signal above background
             total_above_bg = np.maximum(y_calc_out - y_bg_out, 0.0)
             phase_patterns.append(total_above_bg.tolist())
+            phase_pattern_method = 'single_phase_calculated_pattern'
+
+        attach_phase_area_diagnostics(
+            phase_results, tt_out, phase_patterns, phase_pattern_method)
 
         # Use the actual per-phase calculated pattern to choose the FWHM
         # reference angle shown in the GUI. This avoids reporting a generic
@@ -5601,7 +5434,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         # ── Post-refinement sanity warnings ─────────────────────────────
         # Flag suspicious results without failing the run.  Useful for
         # automated screening where a low Rwp is not always trustworthy.
-        _sanity_warnings = list(_validation_warnings)
+        _sanity_warnings = list(_validation_warnings) + _mass_warnings
 
         if _any_hap_broadening_requested and not _measured_instprm:
             _sanity_warnings.append(
@@ -5785,6 +5618,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             'y_calc':         y_calc_out.tolist(),
             'y_background':   y_bg_out.tolist(),
             'phase_patterns': phase_patterns,
+            'phase_pattern_method': phase_pattern_method,
             'residuals':      diff_out.tolist(),
             'statistics':     stats,
             'phase_results':  phase_results,
