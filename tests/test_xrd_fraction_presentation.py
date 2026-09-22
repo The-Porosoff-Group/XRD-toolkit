@@ -41,8 +41,10 @@ class FractionPresentationTests(unittest.TestCase):
                 patch('modules.xrd.gsasii_backend.is_available', return_value=True), \
                 patch('modules.xrd.gsasii_backend.run_gsas2',
                       side_effect=BackendReached) as backend:
+            source = Path(output) / 'pattern.xy'
+            source.write_text('20 1\n21 1\n')
             with self.assertRaises(BackendReached):
-                run('pattern.xy', output, {}, {
+                run(str(source), output, {}, {
                     'phases': phases, 'method': 'gsas2', 'instrument': 'generic'})
         self.assertAlmostEqual(backend.call_args.kwargs['seed_params']['W'], 15)
         self.assertAlmostEqual(backend.call_args.kwargs['seed_params']['Y'], 15)

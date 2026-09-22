@@ -59,6 +59,20 @@ PLOT_THEMES = {
     },
 }
 
+LEGEND_LOCATIONS = (
+    'best', 'upper right', 'upper left', 'lower right', 'lower left',
+    'center right', 'center left', 'upper center', 'lower center',
+    'center', 'outside right',
+)
+
+
+def normalize_legend_location(value=None):
+    """Validate a legend position shared by the UI, batch runner, and exports."""
+    location = str(value or 'best').strip().lower()
+    if location not in LEGEND_LOCATIONS:
+        raise ValueError('Choose a supported XRD legend location.')
+    return location
+
 
 def _phase_axis_label(label):
     """Return a single-line label for the phase-identification axis."""
@@ -109,6 +123,8 @@ def make_xrd_plot(result, metadata, output_path, theme=None):
     metadata : dict
         Sample, wavelength, method, and optional ``plot_theme`` information.
         Set ``show_figure_title`` to False to omit the figure heading.
+        ``legend_location`` selects an inside position, ``best`` (automatic),
+        or ``outside right`` (a wider canvas with no legend over the data).
     output_path : str
         Destination PNG path.
     theme : {"light", "dark"}, optional
@@ -118,6 +134,7 @@ def make_xrd_plot(result, metadata, output_path, theme=None):
     if theme not in PLOT_THEMES:
         theme = 'light'
     palette = PLOT_THEMES[theme]
+    legend_location = normalize_legend_location(metadata.get('legend_location'))
 
     # This enriches labels and tick metadata only.  Fit arrays and statistics
     # are not changed.
@@ -259,12 +276,16 @@ def make_xrd_plot(result, metadata, output_path, theme=None):
         legend_handles.append(Patch(
             facecolor=color, edgecolor=color, alpha=0.70,
             label=_mathtext_scientific_label(phase['legend_label'])))
+    legend_position = (
+        {'loc': 'upper left', 'bbox_to_anchor': (1.02, 1.0)}
+        if legend_location == 'outside right' else
+        {'loc': legend_location, 'bbox_to_anchor': (0.008, 0.012, 0.984, 0.85)}
+    )
     figure_legend = ax_main.legend(
         handles=legend_handles, fontsize=8.2,
         ncol=1,
         facecolor=palette['stats_face'], edgecolor=grid_color,
-        labelcolor=text_color, loc='upper right',
-        bbox_to_anchor=(0.995, 0.875), frameon=True, fancybox=True,
+        labelcolor=text_color, **legend_position, frameon=True, fancybox=True,
         framealpha=0.88, borderpad=0.48, columnspacing=0.9,
         handlelength=1.65, handletextpad=0.48,
     )
@@ -328,6 +349,16 @@ def make_xrd_plot(result, metadata, output_path, theme=None):
         FuncFormatter(lambda value, _position: f'{value:.0f}'))
     fig.subplots_adjust(left=0.11, right=0.985, bottom=0.045,
                         top=top_margin)
+
+    if legend_location == 'outside right':
+        # Add room for the complete legend without compressing the diffraction
+        # axes or clipping long phase labels at the edge of the saved image.
+        fig.canvas.draw()
+        legend_inches = figure_legend.get_window_extent().width / fig.dpi
+        expanded_width = 6.5 + legend_inches + 0.25
+        fig.set_size_inches(expanded_width, figure_height)
+        fig.subplots_adjust(left=6.5 * 0.11 / expanded_width,
+                            right=6.5 * 0.985 / expanded_width)
 
     fig.savefig(
         output_path, dpi=300, facecolor=palette['figure'], edgecolor='none',

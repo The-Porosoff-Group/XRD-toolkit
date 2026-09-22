@@ -497,11 +497,13 @@ def validate_phases(phases, fetch_missing=True):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _write_summary_xlsx(result, metadata, method_label, output_dir):
-    """Write an Excel workbook with two sheets:
+    """Write an Excel workbook with three sheets:
       Sheet 1 ('Summary')   – transposed: parameters as rows, phases as columns
       Sheet 2 ('Plot Data') – X/Y arrays + per-phase peak positions with [hkl]
+      Sheet 3 ('Fit Parameters') – inputs, settings and native GSAS-II state
     """
     import pandas as pd
+    from .fit_export import fit_parameter_rows
 
     enrich_phase_results(result)
     phases = result['phase_results']
@@ -651,6 +653,7 @@ def _write_summary_xlsx(result, metadata, method_label, output_dir):
         rows_data.append(row)
 
     df_summary = pd.DataFrame(rows_data)
+    df_parameters = pd.DataFrame(fit_parameter_rows(result, metadata, method_label))
 
     # ── Sheet 2: Plot data + peak positions ──────────────────────────────
     tt = result.get('tt', [])
@@ -712,6 +715,13 @@ def _write_summary_xlsx(result, metadata, method_label, output_dir):
         with pd.ExcelWriter(xlsx_path, engine='openpyxl') as writer:
             df_summary.to_excel(writer, sheet_name='Summary', index=False)
             df_plot.to_excel(writer, sheet_name='Plot Data', index=False)
+            df_parameters.to_excel(writer, sheet_name='Fit Parameters', index=False)
+            # JSON values are text, including a continuation chunk that happens
+            # to start with '='. Excel must never interpret fit input as a formula.
+            for row in writer.book['Fit Parameters'].iter_rows(min_row=2):
+                for cell in row:
+                    if isinstance(cell.value, str):
+                        cell.data_type = 's'
             for worksheet in writer.book.worksheets:
                 worksheet.freeze_panes = 'B2' if worksheet.title == 'Summary' else 'A2'
                 worksheet.sheet_view.showGridLines = False
@@ -728,6 +738,9 @@ def _write_summary_xlsx(result, metadata, method_label, output_dir):
                     width = min(max(max((len(value) for value in values), default=8) + 2, 12), 38)
                     worksheet.column_dimensions[
                         column_cells[0].column_letter].width = width
+            parameters_sheet = writer.book['Fit Parameters']
+            parameters_sheet.column_dimensions['B'].width = 65
+            parameters_sheet.column_dimensions['F'].width = 95
         return xlsx_path
     except ImportError:
         pass
@@ -735,7 +748,7 @@ def _write_summary_xlsx(result, metadata, method_label, output_dir):
         import warnings
         warnings.warn(f"xlsx write failed ({exc}), falling back to CSV")
 
-    # openpyxl not available or write failed — write two CSV files
+    # Preserve provenance even when the workbook writer falls back to CSV.
     prefix = export_file_prefix(metadata)
     summary_csv = os.path.join(
         output_dir, f'{prefix}_xrd_refinement_summary.csv')
@@ -743,6 +756,8 @@ def _write_summary_xlsx(result, metadata, method_label, output_dir):
     plot_csv = os.path.join(
         output_dir, f'{prefix}_xrd_refinement_plot_data.csv')
     df_plot.to_csv(plot_csv, index=False)
+    df_parameters.to_csv(os.path.join(
+        output_dir, f'{prefix}_xrd_fit_parameters.csv'), index=False)
     return summary_csv
 
 
@@ -763,12 +778,15 @@ def run(filepath, output_dir, metadata, params):
       method           'lebail' (default) or 'rietveld'
     """
     from .lebail    import run_lebail, run_rietveld
-    from .xrd_plots import make_xrd_plot
+    from .xrd_plots import make_xrd_plot, normalize_legend_location
+    from .fit_export import json_value
+    import hashlib
 
     os.makedirs(output_dir, exist_ok=True)
 
     reporting = size_reporting_settings(
         params.get('size_reporting_mode', 'both'), params.get('scherrer_k', 0.9))
+    submitted_params = json_value(params)
 
     # Validate phases
     phases = validate_phases(params.get('phases', []))
@@ -780,6 +798,17 @@ def run(filepath, output_dir, metadata, params):
     tt        = data['tt']
     intensity = data['intensity']
     sigma     = data['sigma']
+    with open(filepath, 'rb') as source:
+        source_sha256 = hashlib.sha256(source.read()).hexdigest()
+    fit_settings = {
+        'submitted_parameters': submitted_params,
+        'input_phases': json_value(phases),
+        'source': {'filename': os.path.basename(filepath), 'sha256': source_sha256},
+        'parsed_input': {
+            'two_theta': json_value(tt), 'intensity': json_value(intensity),
+            'sigma': json_value(sigma), 'metadata': json_value(data.get('metadata', {})),
+        },
+    }
 
     wavelength = params.get('wavelength', 1.54056)
     tt_min     = params.get('tt_min', float(tt.min()))
@@ -814,6 +843,14 @@ def run(filepath, output_dir, metadata, params):
         _instrument_reason = 'specified by params'
 
     # Run refinement
+    fit_settings['effective_parameters'] = {
+        'method': method, 'wavelength': wavelength, 'tt_min': tt_min,
+        'tt_max': tt_max, 'n_bg_coeffs_start': n_bg, 'auto_background': _bg_auto,
+        'max_outer': max_outer, 'instrument': _instrument,
+        'instrument_reason': _instrument_reason,
+        'iteration_limit': max_outer * (3 if method == 'gsas2' else
+                                        5 if method == 'rietveld' else 1),
+    }
     if method == 'gsas2':
         from .gsasii_backend import run_gsas2, is_available as gsas2_available
         if not gsas2_available():
@@ -845,6 +882,7 @@ def run(filepath, output_dir, metadata, params):
             raise ValueError(
                 f"GSAS-II requires CIF with atom coordinates for all phases. "
                 f"Missing for: {', '.join(missing)}.")
+        fit_settings['input_phases'] = json_value(phases)
         # ── Pre-refinement seeding ────────────────────────────────────
         # Run a quick in-house Rietveld first to get physically reasonable
         # profile parameters (U, V, W, X, Y).  These seed GSAS-II's
@@ -978,6 +1016,7 @@ def run(filepath, output_dir, metadata, params):
         )
 
     # Display/export metadata is added only after the fit is complete.
+    result['fit_settings'] = fit_settings
     apply_size_reporting(result, reporting['mode'], reporting['scherrer_k'])
     enrich_phase_results(result)
 
@@ -985,6 +1024,13 @@ def run(filepath, output_dir, metadata, params):
     method_label = {'rietveld': 'Rietveld', 'gsas2': 'GSAS-II',
                     }.get(method, 'Le Bail')
     prefix = export_file_prefix(metadata)
+    project_path = None
+    project_base64 = result.pop('_gsas_project_base64', None)
+    if project_base64:
+        import base64
+        project_path = os.path.join(output_dir, f'{prefix}_xrd_refinement.gpx')
+        with open(project_path, 'wb') as project_file:
+            project_file.write(base64.b64decode(project_base64, validate=True))
     requested_theme = str(params.get('plot_theme', 'light')).lower()
     if requested_theme not in ('light', 'dark'):
         requested_theme = 'light'
@@ -995,6 +1041,7 @@ def run(filepath, output_dir, metadata, params):
         'wavelength_label': params.get('wavelength_label',
                                         f"λ={wavelength:.5f} Å"),
         'method':           method_label,
+        'legend_location': normalize_legend_location(params.get('legend_location')),
     }
     plot_paths = {}
     for plot_theme in ('light', 'dark'):
@@ -1006,14 +1053,18 @@ def run(filepath, output_dir, metadata, params):
         plot_paths[plot_theme] = themed_path
     plot_path = plot_paths[requested_theme]
 
-    # Summary Excel (two sheets: transposed summary + plot data with peaks)
-    summary_path = _write_summary_xlsx(result, metadata, method_label, output_dir)
+    # Summary, plot arrays, and complete fit provenance.
+    summary_path = _write_summary_xlsx(
+        result, dict(metadata, legend_location=plot_metadata['legend_location']),
+        method_label, output_dir)
 
     return {
         'plot_path':    plot_path,
         'plot_paths':   plot_paths,
         'plot_theme':   requested_theme,
+        'legend_location': plot_metadata['legend_location'],
         'summary_path': summary_path,
+        'project_path': project_path,
         'statistics':   result['statistics'],
         'phase_results': result['phase_results'],
         'size_reporting': result.get('size_reporting'),

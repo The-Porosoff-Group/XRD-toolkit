@@ -101,6 +101,25 @@ class SizeRefinementIntegrationTests(unittest.TestCase):
         self.assertFalse(result['refinement_diagnostics']['failed_stages'])
         self.assertEqual(result['displacement_param'], 'Shift')
         self.assertEqual(result['displacement_um'], 0.0)
+        # Export the actual fitted GSAS-II state before display code clears
+        # refinement flags or changes phase scales for component plotting.
+        native = result['gsas_native_parameters']['final_project']['data']
+        self.assertTrue(native['Covariance']['data']['varyList'])
+        native_phase = next(phase for phase in native['Phases'].values()
+                            if isinstance(phase, dict) and phase.get('General'))
+        self.assertTrue(native_phase['General']['Cell'][0])
+        self.assertTrue(result['_gsas_project_base64'])
+
+        import base64
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / 'exported.gpx'
+            archive.write_bytes(base64.b64decode(result['_gsas_project_base64']))
+            with contextlib.redirect_stdout(io.StringIO()):
+                reopened = backend.G2sc.G2Project(gpxfile=str(archive))
+            np.testing.assert_allclose(
+                reopened.histograms()[0].getdata('Ycalc'), result['y_calc'])
+            self.assertEqual(reopened.data['Covariance']['data']['varyList'],
+                             native['Covariance']['data']['varyList'])
 
     def test_flat_plate_height_recovers_known_offset_without_moving_zero(self):
         result = self._fit_synthetic(height_um=120.0, zero_mode=False)

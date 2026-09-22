@@ -4,7 +4,7 @@ Local web server. Run with:  python app.py
 Then open:  http://localhost:5000
 """
 
-import os, sys, re, json, base64, webbrowser, traceback
+import os, sys, re, json, base64, webbrowser, traceback, secrets
 
 # Force unbuffered/line-buffered stdout so GSAS-II refinement progress
 # appears in terminal immediately.  os.environ alone doesn't work because
@@ -16,7 +16,8 @@ try:
 except AttributeError:
     pass  # Python < 3.7
 from datetime import datetime
-from threading import Timer
+from collections import OrderedDict
+from threading import Lock, Timer
 
 # ── Dependency check ─────────────────────────────────────────────────────────
 _REQUIRED = {
@@ -174,6 +175,36 @@ from xrd.presentation import export_file_prefix
 
 # Initialise cache with config settings
 _cache = get_cache(cache_dir=CACHE_DIR, max_size_mb=CACHE_MAX_MB)
+
+_CHARACTERIZATION_CACHE_MAX = 4
+_xrd_plot_cache = OrderedDict()
+_xrd_plot_cache_lock = Lock()
+
+
+def _store_characterization_context(cache, lock, context):
+    token = secrets.token_urlsafe(24)
+    with lock:
+        cache[token] = context
+        cache.move_to_end(token)
+        while len(cache) > _CHARACTERIZATION_CACHE_MAX:
+            cache.popitem(last=False)
+    return token
+
+
+def _get_characterization_context(cache, lock, token):
+    with lock:
+        context = cache.get(token)
+        if context is not None:
+            cache.move_to_end(token)
+        return context
+
+
+def _xrd_plot_arrays(result):
+    """Retain only the completed fit fields needed to redraw its figures."""
+    return {key: result[key] for key in (
+        'tt', 'y_obs', 'y_calc', 'y_background', 'residuals', 'statistics',
+        'phase_results', 'phase_patterns', 'wavelength') if key in result}
+
 
 # ── Preload pymatgen ──────────────────────────────────────────────────────────
 _pymatgen_ready = False
@@ -1150,6 +1181,11 @@ def process_xrd():
         sample_id  = form.get('sample_id', 'Sample')
         figure_title = form.get('figure_title', '').strip()
         show_figure_title = form.get('show_figure_title', 'true').lower() == 'true'
+        from modules.xrd.xrd_plots import normalize_legend_location
+        try:
+            legend_location = normalize_legend_location(form.get('legend_location'))
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
         from modules.xrd.size_reporting import size_reporting_settings
         try:
             size_reporting = size_reporting_settings(
@@ -1318,6 +1354,7 @@ def process_xrd():
                 'sample_id': sample_id,
                 'figure_title': figure_title,
                 'show_figure_title': show_figure_title,
+                'legend_location': legend_location,
                 'wavelength_label': wl_label,
                 'method': 'GSAS-II Calibration',
                 'analysis_date': analysis_date,
@@ -1337,11 +1374,18 @@ def process_xrd():
             with open(plot_path, 'rb') as img:
                 plot_b64 = base64.b64encode(img.read()).decode()
 
+            plot_token = _store_characterization_context(
+                _xrd_plot_cache, _xrd_plot_cache_lock,
+                {'result': _xrd_plot_arrays(plot_result), 'metadata': cal_metadata,
+                 'plot_paths': plot_paths, 'plot_theme': plot_theme})
+
             return jsonify({
                 'plot_b64':      plot_b64,
                 'plot_path':     plot_path,
                 'plot_paths':    plot_paths,
                 'plot_theme':    plot_theme,
+                'plot_token':    plot_token,
+                'legend_location': legend_location,
                 'statistics':    cal_result['statistics'],
                 'phase_results': [{
                     'name': cal_phase.get('name', 'Standard'),
@@ -1387,6 +1431,7 @@ def process_xrd():
                 'sample_id': sample_id,
                 'figure_title': figure_title,
                 'show_figure_title': show_figure_title,
+                'legend_location': legend_location,
                 'notes': notes,
                 'analysis_date': analysis_date,
                 'source_file': f.filename,
@@ -1401,6 +1446,7 @@ def process_xrd():
                 'max_outer':        MAX_OUTER,
                 'method':           form.get('method', 'lebail'),
                 'plot_theme':       plot_theme,
+                'legend_location':  legend_location,
                 'size_reporting_mode': size_reporting['mode'],
                 'scherrer_k': size_reporting['scherrer_k'],
                 'instprm_file':     instprm_file_path,
@@ -1506,12 +1552,26 @@ def process_xrd():
         with open(result['plot_path'], 'rb') as img:
             plot_b64 = base64.b64encode(img.read()).decode()
 
+        plot_token = _store_characterization_context(
+            _xrd_plot_cache, _xrd_plot_cache_lock,
+            {'result': _xrd_plot_arrays(result['result']),
+             'metadata': {'sample_id': sample_id, 'figure_title': figure_title,
+                          'show_figure_title': show_figure_title,
+                          'legend_location': legend_location,
+                          'analysis_date': analysis_date,
+                          'wavelength_label': wl_label,
+                          'method': result.get('method', 'Le Bail')},
+             'plot_paths': result['plot_paths'],
+             'plot_theme': result.get('plot_theme', plot_theme)})
+
         print("=== /api/process_xrd DONE ===", flush=True)
         return jsonify({
             'plot_b64':      plot_b64,
             'plot_path':     result['plot_path'],
             'plot_paths':    result.get('plot_paths', {}),
             'plot_theme':    result.get('plot_theme', plot_theme),
+            'plot_token':    plot_token,
+            'legend_location': legend_location,
             'statistics':    result['statistics'],
             'phase_results': result['phase_results'],
             'size_reporting': result.get('size_reporting'),
@@ -1524,6 +1584,7 @@ def process_xrd():
             'pymatgen_used': result.get('pymatgen_used', False),
             'method':        result.get('method', 'Le Bail'),
             'summary_path':  result['summary_path'],
+            'project_path':  result.get('project_path'),
             'output_dir':    out_dir,
             # Raw arrays for interactive plotting — nested in result['result']
             'plot_data': {
@@ -1553,6 +1614,35 @@ def process_xrd():
         tb = traceback.format_exc()
         print(f"\n  !! XRD refinement error:\n{tb}", flush=True)
         return jsonify({'error': str(e), 'trace': tb}), 500
+
+@app.route('/api/xrd/regenerate_plot', methods=['POST'])
+def regenerate_xrd_plot():
+    """Change a completed fit's figure placement without running refinement."""
+    payload = request.get_json(silent=True) or {}
+    context = _get_characterization_context(
+        _xrd_plot_cache, _xrd_plot_cache_lock, payload.get('plot_token', ''))
+    if context is None:
+        return jsonify({'error': 'This fit is no longer cached. Run the fit again '
+                        'to update its PNG exports.'}), 410
+    from modules.xrd.xrd_plots import make_xrd_plot, normalize_legend_location
+    try:
+        location = normalize_legend_location(payload.get('legend_location'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    metadata = dict(context['metadata'], legend_location=location)
+    try:
+        for theme, path in context['plot_paths'].items():
+            make_xrd_plot(context['result'], metadata, path, theme=theme)
+        context['metadata'] = metadata
+        path = context['plot_paths'][context['plot_theme']]
+        with open(path, 'rb') as image:
+            encoded = base64.b64encode(image.read()).decode()
+        return jsonify({'plot_b64': encoded, 'plot_path': path,
+                        'plot_paths': context['plot_paths'],
+                        'legend_location': location})
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
 
 # ── Launch ────────────────────────────────────────────────────────────────────
 

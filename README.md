@@ -43,6 +43,11 @@ The first launch creates a local Python environment and installs dependencies. G
 - GSAS HAP, Scherrer-equivalent, or combined size reporting with an explicit K
 - Light/dark figure exports with an optional title; single-phase legends omit
   the normalized weight percentage
+- Legend position selector, including automatic and outside-right placement;
+  finished figures can be updated without refitting
+- **Fit Parameters** workbook tab with input scans/uncertainties, fit settings,
+  initial/final native GSAS-II parameters and flags, refinement stages,
+  CIF/instrument inputs, and software versions; companion `.gpx` project download
 - Per-phase controls for:
   - unit-cell refinement
   - crystallite size
@@ -64,6 +69,12 @@ Figure exports use Arial for text, subscripts, and crystallographic overbars.
 Install Arial on the computer generating the figures; the font is not bundled.
 If unavailable, exports warn and use Liberation Sans, then DejaVu Sans. Existing
 PNGs keep their original typography until regenerated.
+
+The **Fit Parameters** tab stores values as JSON text to retain their precision.
+Join numbered parts before decoding a long value. Open the companion `.gpx`
+project in GSAS-II to inspect the fitted model; use matching software versions
+to reproduce a fit. Older workbooks require a new fit to capture the native state.
+Batch runs also accept `--legend-location "outside right"`.
 
 ## Recommended Workflow
 
