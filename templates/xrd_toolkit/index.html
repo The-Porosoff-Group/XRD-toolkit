@@ -774,6 +774,13 @@
                 </label>
                 <span style="font-size:11px;color:var(--muted);">Uncheck for no title on figures exported with the next fit. Use <code>_{...}</code> for subscripts and <code>^{...}</code> for superscripts, e.g. <code>CeZrO_{x}</code> or <code>Fe^{3+}</code>. Include the braces; no dollar signs are needed.</span>
               </div>
+              <div class="form-group full">
+                <label for="xrd-legend-location">Legend location</label>
+                <select id="xrd-legend-location" onchange="updateXrdLegendSelection(this)">
+                  {% include 'xrd_shared/legend_options.html' %}
+                </select>
+                <span class="hint">Applies to the preview and both PNG exports. You can also change it after fitting.</span>
+              </div>
               <div class="form-group">
                 <label for="xrd-size-reporting">Size reporting</label>
                 <select id="xrd-size-reporting">
@@ -1092,6 +1099,13 @@
             <div id="xrd-baseline-comparison"></div>
             <div id="xrd-reusable-fit"></div>
             <div id="xrd-phase-results"></div>
+            <div class="form-group" style="margin:14px 0;">
+              <label for="xrd-result-legend-location">Legend location</label>
+              <select id="xrd-result-legend-location" onchange="updateXrdLegendSelection(this)">
+                {% include 'xrd_shared/legend_options.html' %}
+              </select>
+              <span class="hint" id="xrd-legend-status" role="status">Changing the location updates both PNG exports without rerunning the fit.</span>
+            </div>
             <div id="xrd-interactive-plot" style="display:none;width:100%;height:540px;border-radius:8px;border:1px solid var(--border);"></div>
             <img class="plot-img" id="xrd-result-plot" src="" alt="XRD refinement plot"
                  style="display:none;">
@@ -1958,6 +1972,8 @@ function updateSourceBadge() {
   }
 }
 
+{% include 'xrd_shared/legend_settings.js' %}
+
 // Toggle the GSAS-II Advanced settings row (collapsed by default).
 // The contents are individually revealed when GSAS-II is available;
 // this function controls the wrapper visibility independently.
@@ -2818,6 +2834,7 @@ function getXrdControlState() {
     n_bg_coeffs: document.getElementById('xrd-bg-coeffs')?.value || 'auto',
     size_reporting_mode: document.getElementById('xrd-size-reporting')?.value || 'both',
     scherrer_k: document.getElementById('xrd-scherrer-k')?.value || '0.9',
+    legend_location: document.getElementById('xrd-legend-location')?.value || 'best',
     instrument: document.getElementById('xrd-instrument')?.value || 'auto',
     fix_y_value: document.getElementById('xrd-fix-y-value')?.value || '',
     checkboxes: {},
@@ -2841,6 +2858,7 @@ function applyXrdControlState(controls = {}) {
   setVal('xrd-bg-coeffs', controls.n_bg_coeffs);
   setVal('xrd-size-reporting', controls.size_reporting_mode || 'both');
   setVal('xrd-scherrer-k', controls.scherrer_k ?? '0.90');
+  setVal('xrd-legend-location', controls.legend_location || 'best');
   setVal('xrd-instrument', controls.instrument);
   setVal('xrd-fix-y-value', controls.fix_y_value);
   Object.entries(controls.checkboxes || {}).forEach(([id, checked]) => {
@@ -3094,6 +3112,7 @@ async function runXRD(method) {
     fd.append('sample_id',   document.getElementById('xrd-sample-id').value || xrdFile.name);
     fd.append('figure_title', document.getElementById('xrd-figure-title').value.trim());
     fd.append('show_figure_title', document.getElementById('xrd-show-figure-title').checked);
+    fd.append('legend_location', document.getElementById('xrd-legend-location').value);
     fd.append('tt_min',      document.getElementById('xrd-tt-min').value);
     fd.append('tt_max',      document.getElementById('xrd-tt-max').value);
     fd.append('n_bg_coeffs', document.getElementById('xrd-bg-coeffs').value || 'auto');
@@ -3730,12 +3749,14 @@ function renderXrdPublicationPlot(data) {
     const sample = document.getElementById('xrd-sample-id')?.value || xrdFile?.name || 'Sample';
     const figureTitle = document.getElementById('xrd-figure-title')?.value.trim() || sample;
     const showFigureTitle = document.getElementById('xrd-show-figure-title')?.checked ?? true;
+    const legendLocation = data.legend_location || document.getElementById('xrd-legend-location')?.value || 'best';
+    const legendPosition = xrdLegendLayout(legendLocation, pd, phases.length, mainBottom);
     const stats = data.statistics || {};
     const statsTitle = `Rwp ${stats.Rwp ?? '—'} % · Rp ${stats.Rp ?? '—'} % · χ² ${stats.chi2 ?? '—'} · GoF ${stats.GoF ?? '—'}`;
     const layout = {
       paper_bgcolor:palette.paper, plot_bgcolor:palette.plot,
       font:{color:palette.text,size:12,family:'Arial, sans-serif'},
-      margin:{l:110,r:22,t:showFigureTitle ? 70 : 20,b:58},
+      margin:{l:110,r:legendLocation === 'outside right' ? 260 : 22,t:showFigureTitle ? 70 : 20,b:58},
       title:showFigureTitle ? {text:`<b>${scientificLabelHtml(figureTitle)}</b><br><span style="font-size:11px">${statsTitle}</span>`,
              x:0.5,xanchor:'center',font:{size:17}} : undefined,
       xaxis:{gridcolor:palette.grid,zeroline:false,tickfont:{size:12}},
@@ -3744,7 +3765,7 @@ function renderXrdPublicationPlot(data) {
       yaxis2:{title:{text:'Difference',font:{size:12}},
               gridcolor:palette.grid,zeroline:true,zerolinecolor:palette.background,
               domain:[0,0.15],anchor:'x',tickfont:{size:11}},
-      legend:{orientation:'v',x:0.992,y:0.985,xanchor:'right',yanchor:'top',
+      legend:{orientation:'v',...legendPosition,
               bgcolor:'rgba(28,33,40,.90)',
               bordercolor:palette.grid,borderwidth:1,font:{size:11}},
       shapes:shapes,annotations:annotations,dragmode:'zoom',
@@ -3759,7 +3780,7 @@ function renderXrdPublicationPlot(data) {
     Plotly.react(interactivePlot,traces,layout,config);
   } else if (data.plot_paths?.dark) {
     interactivePlot.style.display = 'none';
-    plotEl.src = '/api/download?path=' + encodeURIComponent(data.plot_paths.dark);
+    plotEl.src = '/api/download?path=' + encodeURIComponent(data.plot_paths.dark) + '&v=' + (data._plot_revision || 0);
     plotEl.style.display = 'block';
   } else if (data.plot_b64) {
     interactivePlot.style.display = 'none';
@@ -3770,6 +3791,10 @@ function renderXrdPublicationPlot(data) {
 
 function showXRDResults(data) {
   xrdLastResult = data;
+  ['xrd-legend-location', 'xrd-result-legend-location'].forEach(id => {
+    document.getElementById(id).value = data.legend_location || 'best';
+  });
+  document.getElementById('xrd-legend-status').textContent = 'Changing the location updates both PNG exports without rerunning the fit.';
   xrdLastFitSnapshot = buildXrdFitSnapshot(data);
   const panel = document.getElementById('xrd-results-panel');
   panel.classList.add('visible');
@@ -3918,6 +3943,8 @@ function showXRDResults(data) {
     `<button class="btn-sm" onclick="downloadFile('${escPath(data.plot_paths.dark)}')">⬇ Dark Presentation Figure (PNG)</button>`);
   if (data.summary_path) xrdDownloads.push(
     `<button class="btn-sm" onclick="downloadFile('${escPath(data.summary_path)}')">⬇ Refinement Workbook</button>`);
+  if (data.project_path) xrdDownloads.push(
+    `<button class="btn-sm" onclick="downloadFile('${escPath(data.project_path)}')">⬇ GSAS-II Project (GPX)</button>`);
   document.getElementById('xrd-download-row').innerHTML = xrdDownloads.join('');
 
   panel.scrollIntoView({behavior:'smooth', block:'start'});
@@ -3959,6 +3986,8 @@ function resetXRD() {
   document.getElementById('xrd-show-figure-title').checked = true;
   document.getElementById('xrd-size-reporting').value = 'both';
   document.getElementById('xrd-scherrer-k').value = '0.90';
+  document.getElementById('xrd-legend-location').value = 'best';
+  document.getElementById('xrd-result-legend-location').value = 'best';
   document.getElementById('xrd-figure-title').disabled = false;
   document.getElementById('xrd-candidates-wrap').style.display = 'none';
   document.getElementById('xrd-selected-wrap').style.display = 'none';

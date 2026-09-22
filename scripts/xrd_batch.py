@@ -454,6 +454,8 @@ def run_batch(args: argparse.Namespace) -> int:
         api_key=api_key,
     )
     params = _controls_to_params(recipe, phases, Path(args.instprm).resolve() if args.instprm else None)
+    if getattr(args, 'legend_location', None):
+        params['legend_location'] = args.legend_location
     patterns = _expand_patterns(args.patterns)
 
     output_root = Path(args.out).resolve()
@@ -494,6 +496,7 @@ def run_batch(args: argparse.Namespace) -> int:
             "phase_results": rows,
             "plot_path": result.get("plot_path"),
             "summary_path": result.get("summary_path"),
+            "project_path": result.get("project_path"),
         }
         batch_results.append(compact)
         with (sample_dir / "summary.json").open("w", encoding="utf-8") as f:
@@ -519,6 +522,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mp-api-key", default="", help="Materials Project API key override")
     p.add_argument("--instprm", help="Optional GSAS-II .instprm file")
     p.add_argument("--sample-id", help="Sample id for a single pattern run")
+    p.add_argument("--legend-location", choices=[
+        'best', 'upper right', 'upper left', 'lower right', 'lower left',
+        'center right', 'center left', 'upper center', 'lower center',
+        'center', 'outside right'], help="Position of the fitted-data legend")
     return p
 
 

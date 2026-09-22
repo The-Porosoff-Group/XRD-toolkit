@@ -33,6 +33,11 @@ import math, os, re, sys, tempfile, warnings
 import numpy as np
 
 try:
+    from .native_parameters import NativeFitRecorder, native_value
+except ImportError:
+    from native_parameters import NativeFitRecorder, native_value
+
+try:
     from .quantification import (
         attach_phase_area_diagnostics, official_mass_fraction_uncertainties,
         resolve_mass_fractions,
@@ -2102,6 +2107,15 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             f"&& cd GSAS-II && pip install .\n"
             f"Import error: {_GSASII_IMPORT_ERROR}")
 
+    _native_recorder = NativeFitRecorder({
+        'wavelength': wavelength, 'tt_min': tt_min, 'tt_max': tt_max,
+        'n_bg_coeffs': n_bg_coeffs, 'max_cycles': max_cycles,
+        'instprm_file': instprm_file, 'polariz': polariz, 'sh_l': sh_l,
+        'auto_bg': auto_bg, 'seed_params': seed_params, 'options': options,
+        'instrument': instrument, 'instrument_reason': instrument_reason,
+        'sigma_supplied': sigma is not None, 'phases': phases,
+    }, G2sc, __file__)
+
     # ── Resolve instrument profile ─────────────────────────────────────────
     # The instrument profile bundles geometry, displacement model, polariz,
     # SH/L, PO default, zero seed, and sigma inflation into one coherent
@@ -2600,6 +2614,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             print(f"    ... ({len(_cif_lines) - 40} more lines)", flush=True)
         print(f"  === end CIF ===\n", flush=True)
 
+    gsas_cif_paths = list(cif_paths)
     try:
         # ── Build GSAS-II project ────────────────────────────────────────
         try:
@@ -2723,6 +2738,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                             histograms=[histogram],
                         )
                         gsas_cif_texts[i] = orig_cif
+                        gsas_cif_paths[i] = orig_path
                         prepared_gsas_models[i] = _prepared_cif_reference(
                             orig_cif, ph)
                         warnings.warn(
@@ -2971,6 +2987,8 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         # ── Helper to safely run a refinement stage ──────────────────────
         def _safe_refine(stage_name, refinement_dicts, stage_num):
             nonlocal last_good_stage
+            _native_stage = _native_recorder.begin_stage(
+                gpx, stage_name, stage_num, refinement_dicts)
             try:
                 _run_refinement_steps(gpx, refinement_dicts)
                 last_good_stage = stage_num
@@ -2986,6 +3004,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                     'failed': False,
                 })
                 _stage_diagnostics.append(_diag)
+                _native_stage['outcome'] = native_value(_diag)
                 if _diag.get('converged') is False:
                     print(
                         f"  Stage diagnostic: '{stage_name}' reached its "
@@ -3013,6 +3032,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                     'failed': True,
                     'error': str(e),
                 })
+                _native_stage['outcome'] = native_value(_stage_diagnostics[-1])
                 warnings.warn(f"GSAS-II: {stage_name} failed ({e}). "
                              f"Continuing with results from stage {last_good_stage}.")
                 return False
@@ -4080,6 +4100,40 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                       f"Scale = {_scale}, Pref.Ori. = {_po}", flush=True)
         except Exception as _e:
             print(f"    Could not inspect HAP state: {_e}", flush=True)
+
+        # Preserve native values/flags and a reloadable GPX while this is
+        # still the fitted model, before any display-only project mutations.
+        _native_recorder.payload['effective_settings'] = native_value({
+            'instrument': instrument, 'instrument_reason': instrument_reason,
+            'instrument_profile': profile, 'measured_instprm': _measured_instprm,
+            'geometry': geometry, 'wavelength': wavelength,
+            'tt_min': tt_min, 'tt_max': tt_max,
+            'n_bg_coeffs': n_bg_coeffs, 'max_cycles': max_cycles,
+            'cycle_multiplier': _cyc_mult, 'auto_bg': auto_bg,
+            'background_mode': background_mode, 'exclude_regions': exclude_regions,
+            'sigma_inflation_factor': _SIGMA_INFLATION_FACTOR,
+            'seed_active': _seed_active, 'cu_doublet': _use_doublet,
+            'polariz': polariz, 'sh_l': sh_l,
+            'preferred_orientation': preferred_orientation,
+            'refine_xyz': refine_xyz, 'verification_mode': verification_mode,
+            'phase_options': [_phase_opts_for(idx, phase_obj.name)
+                              for idx, phase_obj in enumerate(gsas_phases)],
+        }, _native_recorder.notes)
+        import hashlib as _hashlib
+        def _native_input_file(path):
+            with open(path, 'rb') as stream:
+                content = stream.read()
+            return {'filename': os.path.basename(path),
+                    'sha256': _hashlib.sha256(content).hexdigest(),
+                    'text': content.decode('utf-8-sig', errors='replace')}
+        _native_recorder.payload['input_files'] = {
+            'instrument_parameters': _native_input_file(instprm_path),
+            'phases': [dict(_native_input_file(path), name=phase_obj.name)
+                       for path, phase_obj in zip(gsas_cif_paths, gsas_phases)],
+            'scan': dict(_native_input_file(data_path),
+                         format='XYE: 2theta degrees, intensity, sigma'),
+        }
+        _native_recorder.finish(gpx, gpx_path)
 
         # Turn off cell refinement after final stage to avoid affecting
         # any subsequent operations
@@ -5633,6 +5687,8 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             'instrument':     instrument,
             'instrument_label': profile['label'],
             'instrument_reason': instrument_reason,
+            'gsas_native_parameters': _native_recorder.payload,
+            '_gsas_project_base64': _native_recorder.project_base64,
         }
 
         print("=== GSAS-II REFINEMENT DONE ===", flush=True)
