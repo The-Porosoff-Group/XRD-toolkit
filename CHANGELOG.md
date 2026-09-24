@@ -1,5 +1,14 @@
 # Release notes
 
+## 1.2.2 — 2026-09-24
+
+- Make the XRD workbook's **Fit Parameters** tab a readable recipe for repeating
+  the fit in the GUI: original phase-card and CIF identities, instrument and
+  file identities, scan range, background settings, every checkbox and entered
+  value, and software versions.
+- Keep detailed native GSAS-II parameters, arrays, and the fitted model in the
+  companion `.gpx` project instead of dumping them as JSON into the worksheet.
+
 ## 1.2.1 — 2026-09-24
 
 - Restore the instrument selector beside Run Refinement with three shared

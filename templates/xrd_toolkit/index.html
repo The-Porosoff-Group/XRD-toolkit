@@ -2265,7 +2265,7 @@ async function uploadCIF(e) {
     });
     const data = await resp.json();
     if (!resp.ok || data.error) throw new Error(data.error || 'CIF preview failed');
-    const phase = {...data, cod_id: 'manual', source: 'manual', cif_text: text};
+    const phase = {...data, cod_id: 'manual', source: 'manual', cif_filename: file.name, cif_text: text};
     xrdPhases.push(phase);
     addStickPhase(phase);
     renderSelectedPhases();
@@ -2303,6 +2303,7 @@ async function uploadCIF(e) {
     spacegroup,
     cod_id: 'manual',
     source: 'manual',
+    cif_filename: file.name,
     cif_text: text,
     preview_unavailable: true,
     cif_check: {
@@ -2854,7 +2855,7 @@ function applyXrdControlState(controls = {}) {
 
 function stripPhaseForPreset(phase) {
   const keep = [
-    'name', 'formula', 'source', 'cod_id', 'mp_id', 'mp_api_id', 'cache_key',
+    'name', 'formula', 'source', 'cod_id', 'mp_id', 'mp_api_id', 'cache_key', 'cif_filename',
     'a', 'b', 'c', 'alpha', 'beta', 'gamma',
     'system', 'spacegroup', 'spacegroup_number', 'Z',
     'gamma_wc1x', 'gamma_c_occupancy', 'gamma_vacancy_x',
@@ -3066,6 +3067,7 @@ async function runXRD(method) {
     const fd = new FormData();
     fd.append('file',        xrdFile);
     fd.append('wavelength',  document.getElementById('xrd-wavelength').value);
+    fd.append('wavelength_source', document.getElementById('xrd-source').value);
     fd.append('wavelength_label',
       document.getElementById('xrd-source').options[
         document.getElementById('xrd-source').selectedIndex].text);
@@ -3153,6 +3155,11 @@ async function runXRD(method) {
       const {cif_text, ...rest} = p; return rest;
     });
     fd.append('phases', JSON.stringify(phases_stripped));
+    fd.append('interface_settings', JSON.stringify({
+      controls: getXrdControlState(),
+      phase_options: xrdPhaseOptions.map(options => ({...options})),
+      wavelength_label: document.getElementById('xrd-source').selectedOptions[0].text,
+    }));
 
     // 5-minute timeout — refinements can be slow, especially without MKL numpy
     const controller = new AbortController();

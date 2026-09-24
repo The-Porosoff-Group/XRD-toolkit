@@ -500,7 +500,7 @@ def _write_summary_xlsx(result, metadata, method_label, output_dir):
     """Write an Excel workbook with three sheets:
       Sheet 1 ('Summary')   – transposed: parameters as rows, phases as columns
       Sheet 2 ('Plot Data') – X/Y arrays + per-phase peak positions with [hkl]
-      Sheet 3 ('Fit Parameters') – inputs, settings and native GSAS-II state
+      Sheet 3 ('Fit Parameters') – phase cards and interface settings to repeat the fit
     """
     import pandas as pd
     from .fit_export import fit_parameter_rows
@@ -716,8 +716,7 @@ def _write_summary_xlsx(result, metadata, method_label, output_dir):
             df_summary.to_excel(writer, sheet_name='Summary', index=False)
             df_plot.to_excel(writer, sheet_name='Plot Data', index=False)
             df_parameters.to_excel(writer, sheet_name='Fit Parameters', index=False)
-            # JSON values are text, including a continuation chunk that happens
-            # to start with '='. Excel must never interpret fit input as a formula.
+            # User-supplied names must remain text, even when they start with '='.
             for row in writer.book['Fit Parameters'].iter_rows(min_row=2):
                 for cell in row:
                     if isinstance(cell.value, str):
@@ -739,8 +738,27 @@ def _write_summary_xlsx(result, metadata, method_label, output_dir):
                     worksheet.column_dimensions[
                         column_cells[0].column_letter].width = width
             parameters_sheet = writer.book['Fit Parameters']
-            parameters_sheet.column_dimensions['B'].width = 65
-            parameters_sheet.column_dimensions['F'].width = 95
+            parameters_sheet.column_dimensions['A'].width = 30
+            parameters_sheet.column_dimensions['B'].width = 34
+            parameters_sheet.column_dimensions['C'].width = 76
+            last_section = None
+            for row in parameters_sheet.iter_rows(min_row=2):
+                section = row[0].value
+                first_in_section = section != last_section
+                for cell in row:
+                    cell.alignment = openpyxl.styles.Alignment(
+                        vertical='top', wrap_text=True)
+                    if first_in_section:
+                        cell.fill = openpyxl.styles.PatternFill('solid', fgColor='E8EFF7')
+                    if cell.column < 3:
+                        cell.font = openpyxl.styles.Font(bold=True, color='1F4E78')
+                    if isinstance(cell.value, (float, int)):
+                        cell.number_format = 'General'
+                import math
+                lines = max(math.ceil(len(str(cell.value or '')) / width)
+                            for cell, width in zip(row, (27, 31, 70)))
+                parameters_sheet.row_dimensions[row[0].row].height = max(24, lines * 15 + 8)
+                last_section = section
         return xlsx_path
     except ImportError:
         pass
@@ -780,6 +798,7 @@ def run(filepath, output_dir, metadata, params):
     from .lebail    import run_lebail, run_rietveld
     from .xrd_plots import make_xrd_plot, normalize_legend_location
     from .fit_export import json_value
+    from toolkit_version import APP_VERSION
     import hashlib
 
     os.makedirs(output_dir, exist_ok=True)
@@ -801,9 +820,12 @@ def run(filepath, output_dir, metadata, params):
     with open(filepath, 'rb') as source:
         source_sha256 = hashlib.sha256(source.read()).hexdigest()
     fit_settings = {
+        'software': {'toolkit_version': APP_VERSION},
+        'interface_settings': json_value(params.get('interface_settings', {})),
         'submitted_parameters': submitted_params,
         'input_phases': json_value(phases),
-        'source': {'filename': os.path.basename(filepath), 'sha256': source_sha256},
+        'source': {'filename': metadata.get('source_file') or os.path.basename(filepath),
+                   'sha256': source_sha256},
         'parsed_input': {
             'two_theta': json_value(tt), 'intensity': json_value(intensity),
             'sigma': json_value(sigma), 'metadata': json_value(data.get('metadata', {})),
@@ -851,7 +873,12 @@ def run(filepath, output_dir, metadata, params):
             if not os.path.isfile(measured_file):
                 raise ValueError('The selected instrument file is missing. Upload it again or select a generic profile.')
             with open(measured_file, 'rb') as profile_input:
-                values = parse_instprm(profile_input.read())
+                profile_bytes = profile_input.read()
+            values = parse_instprm(profile_bytes)
+            fit_settings['instrument_file'] = {
+                'filename': params.get('instprm_original_filename') or os.path.basename(measured_file),
+                'sha256': hashlib.sha256(profile_bytes).hexdigest(),
+            }
             validate_profile_range(values, tt_min, tt_max)
             wavelength = values.get('Lam', values.get('Lam1'))
             params['instprm_file'] = measured_file
@@ -1046,6 +1073,7 @@ def run(filepath, output_dir, metadata, params):
         project_path = os.path.join(output_dir, f'{prefix}_xrd_refinement.gpx')
         with open(project_path, 'wb') as project_file:
             project_file.write(base64.b64decode(project_base64, validate=True))
+        fit_settings['project_file'] = os.path.basename(project_path)
     requested_theme = str(params.get('plot_theme', 'light')).lower()
     if requested_theme not in ('light', 'dark'):
         requested_theme = 'light'
