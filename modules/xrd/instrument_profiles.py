@@ -66,6 +66,8 @@ def parse_instprm(content):
             raise ValueError('The .instprm file must be UTF-8 text.') from exc
     if not isinstance(content, str) or not content.strip() or len(content) > 100000:
         raise ValueError('Provide a nonempty .instprm file smaller than 100 KB.')
+    if 'GSAS-II' not in content.splitlines()[0]:
+        raise ValueError('The first line must contain the GSAS-II instrument-file header. Export a GSAS-II .instprm file.')
     values = {}
     for line in content.splitlines():
         if line.lstrip().startswith('#'):
