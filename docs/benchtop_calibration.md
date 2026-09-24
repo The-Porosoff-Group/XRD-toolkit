@@ -1,10 +1,17 @@
-# Benchtop Cu flat-plate calibration — v1.2.0
+# Benchtop Cu flat-plate calibration — v1.2.1
 
-Select **Benchtop Cu — flat plate (Si 640g)** in Instrument Settings in either
+Select **Benchtop Cu — flat plate (Si 640g)** beside **Run Refinement** in either
 the Catalysis Data Toolkit or the standalone XRD tool. The bundled file is
 [`benchtop_Cu_Si640g.instprm`](../benchtop_Cu_Si640g.instprm). It is included in
 Git, so pulling this release also installs the dropdown entry. No upload is
-needed. A separately saved local instrument remains local to its installation.
+needed. The calibration values below are unchanged from v1.2.0.
+
+To calibrate another Si 640g scan, select **None / calibration**, choose its
+geometry, and run refinement. This starts from fresh parameters without loading
+an `.instprm`; ordinary Cu data use the Cu doublet automatically. Download the
+candidate and report from the results. For a sample fit using another measured
+file, select a named instrument with the matching geometry and choose the
+optional `.instprm` override under **GSAS controls**.
 
 This empirical calibration belongs to the benchtop instrument that produced
 the supplied `Standard.txt` scan. Its make/model and detailed optics were not

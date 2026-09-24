@@ -1,105 +1,48 @@
-let xrdInstrumentProfiles = [];
+const XRD_INSTRUMENT_IDS = ['smartlab', 'synergy_s', 'benchtop_cu', 'none'];
 
-async function refreshXrdInstruments(selected) {
-  const select = document.getElementById('xrd-instrument');
-  const previous = selected || select.value || 'generic_flat_plate';
-  try {
-    const response = await fetch('/api/xrd/instruments');
-    if (response.status === 404) throw new Error('Restart the toolkit to enable local instrument profiles.');
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'Could not load instruments.');
-    xrdInstrumentProfiles = data.instruments;
-    const options = data.instruments.map(profile => {
-      const option = document.createElement('option');
-      option.value = profile.id;
-      option.textContent = profile.label + (profile.local ? ' — local' : '');
-      return option;
-    });
-    for (const [value, label] of [['upload', 'Upload .instprm…'], ['auto', 'Auto-detect from scan name']]) {
-      const option = document.createElement('option');
-      option.value = value; option.textContent = label; options.push(option);
-    }
-    select.replaceChildren(...options);
-    select.value = options.some(option => option.value === previous) ? previous : data.default;
-    xrdInstrumentChanged(false);
-  } catch (error) {
-    document.getElementById('xrd-instrument-status').textContent = error.message;
-  }
+function isXrdCalibration() {
+  return document.getElementById('xrd-instrument').value === 'none';
 }
 
 function xrdInstrumentChanged(clearUpload = true) {
-  const value = document.getElementById('xrd-instrument').value;
-  const uploading = value === 'upload';
-  document.getElementById('xrd-upload-profile').style.display = uploading ? '' : 'none';
-  document.getElementById('xrd-save-upload').style.display = uploading ? '' : 'none';
-  if (clearUpload && !uploading) document.getElementById('xrd-instprm-file').value = '';
-  const profile = xrdInstrumentProfiles.find(item => item.id === value);
-  if (clearUpload && Number.isFinite(profile?.polariz)) {
-    document.getElementById('xrd-calibration-polariz').value = profile.polariz;
-  }
-  let description = profile?.notes || (uploading
-    ? 'Choose the geometry and upload your own GSAS-II profile.'
-    : 'Unrecognized scans use the generic flat-plate profile, never a named instrument calibration.');
-  if (profile?.calibration_range) description += ` Calibrated over ${profile.calibration_range.join('–')}° 2θ.`;
-  if (profile?.wavelength) description += ` File wavelength: ${profile.wavelength.toFixed(6)} Å.`;
-  document.getElementById('xrd-instrument-description').textContent = description;
+  const calibrating = isXrdCalibration();
+  const upload = document.getElementById('xrd-instprm-file');
+  if (clearUpload) upload.value = '';
+  upload.disabled = calibrating;
+  document.getElementById('xrd-calibration-help').style.display = calibrating ? '' : 'none';
+  document.getElementById('xrd-instrument-status').textContent = '';
+  document.getElementById('btn-xrd-gsas2').textContent = calibrating ? 'Run calibration' : 'GSAS-II Refinement';
+  document.getElementById('xrd-instprm-override').style.display = calibrating ? 'none' : '';
+  document.getElementById('xrd-calibration-phase-hint').style.display = calibrating ? '' : 'none';
 }
 
-function xrdCalibrationChanged() {
-  const calibrating = document.getElementById('xrd-calibration-mode').checked;
-  document.getElementById('xrd-calibration-help').style.display = calibrating ? '' : 'none';
-  document.getElementById('xrd-save-upload').disabled = calibrating;
+function restoreXrdInstrument(controls = {}) {
+  const selected = controls.instrument;
+  const legacyCalibration = controls.checkboxes?.['xrd-calibration-mode'];
+  const supported = XRD_INSTRUMENT_IDS.includes(selected);
+  document.getElementById('xrd-instrument').value = legacyCalibration ? 'none' : supported ? selected : 'none';
+  document.getElementById('xrd-calibration-geometry').value =
+    selected === 'generic_capillary' || (legacyCalibration && selected === 'synergy_s') ? 'capillary' :
+    legacyCalibration && ['smartlab', 'benchtop_cu'].includes(selected) ? 'bragg_brentano' :
+    controls.instrument_geometry || 'bragg_brentano';
+  xrdInstrumentChanged();
+  if (selected && !supported && !legacyCalibration) {
+    document.getElementById('xrd-instrument-status').textContent =
+      'This saved preset used an older profile. Choose one of the three instruments for sample fitting, or None / calibration for a standard.';
+  }
 }
 
 function appendXrdInstrumentSettings(fd) {
   const selected = document.getElementById('xrd-instrument').value;
-  if (!selected) throw new Error('Select an available instrument or a generic geometry.');
-  const calibrating = document.getElementById('xrd-calibration-mode').checked;
-  const upload = document.getElementById('xrd-instprm-file').files[0];
-  if (selected === 'upload' && !upload && !calibrating) throw new Error('Choose a .instprm file to upload.');
+  if (!XRD_INSTRUMENT_IDS.includes(selected)) throw new Error('Select an instrument or None / calibration.');
   fd.append('instrument', selected);
-  fd.append('instrument_geometry', document.getElementById('xrd-upload-geometry').value);
-  fd.append('spectrum', document.getElementById('xrd-spectrum').value);
-  fd.append('calibration_standard', 'Si640g');
-  fd.append('calibration_name', document.getElementById('xrd-local-instrument-name').value.trim());
-  fd.append('calibration_polariz', document.getElementById('xrd-calibration-polariz').value);
-  if (selected === 'upload' && upload && !calibrating) fd.append('instprm_file', upload);
-}
-
-async function saveXrdLocalInstrument(fromCalibration) {
-  const status = document.getElementById(fromCalibration ? 'xrd-calibration-save-status' : 'xrd-instrument-status');
-  const button = document.getElementById(fromCalibration ? 'xrd-save-calibration' : 'xrd-save-upload');
-  button.disabled = true;
-  try {
-    const fd = new FormData();
-    const input = document.getElementById(fromCalibration ? 'xrd-result-instrument-name' : 'xrd-local-instrument-name');
-    const label = input.value.trim();
-    if (!label) throw new Error('Enter a name for this local instrument.');
-    fd.append('label', label);
-    if (fromCalibration) {
-      if (!xrdLastResult?.calibration_token) throw new Error('Run calibration first.');
-      fd.append('calibration_token', xrdLastResult.calibration_token);
-    } else {
-      const file = document.getElementById('xrd-instprm-file').files[0];
-      if (!file) throw new Error('Choose a .instprm file first.');
-      fd.append('instprm_file', file);
-      fd.append('geometry', document.getElementById('xrd-upload-geometry').value);
-    }
-    const response = await fetch('/api/xrd/instruments', {method:'POST', body:fd});
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'Could not save instrument.');
-    await refreshXrdInstruments(data.instrument);
-    document.getElementById('xrd-local-instrument-name').value = label;
-    document.getElementById('xrd-instprm-file').value = '';
-    if (fromCalibration) {
-      document.getElementById('xrd-calibration-mode').checked = false;
-      xrdCalibrationChanged();
-    }
-    status.textContent = `${label} saved locally and selected. New sample fits will load its .instprm automatically.`;
-  } catch (error) {
-    status.textContent = error.message;
-  } finally {
-    button.disabled = false;
+  if (isXrdCalibration()) {
+    fd.append('calibration_mode', 'true');
+    fd.append('instrument_geometry', document.getElementById('xrd-calibration-geometry').value);
+    fd.append('calibration_standard', 'Si640g');
+  } else {
+    const upload = document.getElementById('xrd-instprm-file').files[0];
+    if (upload) fd.append('instprm_file', upload);
   }
 }
 
@@ -115,7 +58,7 @@ function renderXrdCalibrationResult(data) {
   const title = document.createElement('p');
   title.textContent = validation.passed
     ? 'Candidate created. Parameter checks passed; review the fit before using this profile.'
-    : 'Candidate created, but parameter checks failed. Review the report and rerun before saving.';
+    : 'Candidate created, but parameter checks failed. Review the report and rerun before using this file.';
   panel.append(title);
   const details = document.createElement('p');
   details.textContent = [...(validation.reasons || []), ...(validation.warnings || [])].join(' ');
@@ -137,18 +80,6 @@ function renderXrdCalibrationResult(data) {
     button.style.margin = '0 6px 8px 0'; button.onclick = () => downloadFile(path);
     panel.append(button);
   }
-  const label = document.createElement('label');
-  label.htmlFor = 'xrd-result-instrument-name'; label.textContent = 'Save this candidate under a local instrument name';
-  label.style.display = 'block'; panel.append(label);
-  const input = document.createElement('input');
-  input.id = 'xrd-result-instrument-name'; input.maxLength = 100;
-  input.value = data.calibration_name || ''; panel.append(input);
-  const save = document.createElement('button');
-  save.id = 'xrd-save-calibration'; save.className = 'btn-sm green'; save.type = 'button';
-  save.textContent = 'Save as local instrument'; save.disabled = !validation.passed;
-  save.onclick = () => saveXrdLocalInstrument(true); panel.append(save);
-  const status = document.createElement('p'); status.id = 'xrd-calibration-save-status';
-  status.setAttribute('role', 'status'); panel.append(status);
 }
 
-document.addEventListener('DOMContentLoaded', () => { refreshXrdInstruments(); xrdCalibrationChanged(); });
+document.addEventListener('DOMContentLoaded', () => xrdInstrumentChanged(false));

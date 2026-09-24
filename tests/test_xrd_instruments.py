@@ -65,6 +65,25 @@ class InstrumentTests(unittest.TestCase):
         self.assertEqual(Path(profiles.instrument_file(saved[first])).read_text(), PROFILE)
         self.assertEqual(profiles.INSTRUMENT_PROFILES['smartlab'], original)
 
+    def test_primary_choices_exclude_legacy_geometry_and_saved_trials(self):
+        local_key = profiles.save_local_instrument('Bench trial', 'bragg_brentano', PROFILE)
+        primary = profiles.get_primary_instrument_profiles()
+        self.assertEqual(list(primary), ['smartlab', 'synergy_s', 'benchtop_cu', 'none'])
+        self.assertNotIn(local_key, primary)
+        self.assertIn(local_key, profiles.get_instrument_profiles())
+        for key in ('smartlab', 'synergy_s', 'benchtop_cu'):
+            self.assertIsNotNone(profiles.instrument_file(primary[key]))
+
+    def test_none_calibration_cannot_load_a_named_instrument_file(self):
+        profile = profiles.get_instrument_profile('none')
+        self.assertIsNone(profiles.instrument_file(profile))
+        self.assertEqual(profile['geometry'], 'bragg_brentano')
+        self.assertEqual(profile['zero_seed'], 0)
+        self.assertTrue(profile['calibration'])
+        self.assertNotIn('calibration_allow_x', profile)
+        self.assertNotIn('calibration_allow_y', profile)
+        self.assertNotIn('calibration_fixed_sh_l', profile)
+
     def test_reject_invalid_files_before_writing(self):
         invalid = ['', '# extra comment\n' + PROFILE, PROFILE.replace('PXC', 'PNT'), PROFILE.replace('U:2', 'U:nan'),
                    PROFILE.replace('Lam:1.540593', 'Lam:0'), PROFILE + 'U:1\n',
@@ -149,9 +168,10 @@ class InstrumentRouteTests(InstrumentTests):
         for route in ('/', '/xrd'):
             html = self.client.get(route).get_data(as_text=True)
             self.assertEqual(html.count('id="xrd-instrument"'), 1)
-            self.assertEqual(html.count('id="xrd-calibration-mode"'), 1)
-            self.assertIn('Upload .instprm', html)
-            self.assertIn('Save as local instrument', html)
+            self.assertNotIn('id="xrd-calibration-mode"', html)
+            self.assertNotIn('id="xrd-local-instrument-name"', html)
+            self.assertNotIn('id="xrd-spectrum"', html)
+            self.assertIn('None / calibration', html)
             from toolkit_version import APP_VERSION
             self.assertIn(f'v{APP_VERSION}', html)
 
@@ -193,6 +213,36 @@ class InstrumentRouteTests(InstrumentTests):
         self.assertEqual(kwargs['spectrum'], 'single')
         self.assertTrue(Path(kwargs['output_instprm']).is_relative_to(self.root))
         self.assertIn('calibration_token', response.json)
+
+    def test_none_selection_alone_calibrates_with_no_uploaded_or_named_profile(self):
+        result = dict(
+            tt=[28, 28.4, 29], y_obs=[1, 3, 1], y_calc=[1, 3, 1],
+            y_background=[1, 1, 1], residuals=[0, 0, 0],
+            statistics={'Rwp': 2}, params={'Zero': 0}, validation={'passed': True},
+            geometry='bragg_brentano', fit_range=[20, 90], instprm_text=PROFILE,
+            instprm_path=str(self.root / 'candidate.instprm'))
+        def plot(result, metadata, path, **kwargs):
+            Path(path).write_bytes(b'plot')
+        for geometry, instrument in [('bragg_brentano', 'none'), ('capillary', 'generic_capillary')]:
+            with self.subTest(geometry=geometry), \
+                 patch.object(calibration, 'run_calibration', return_value=dict(result, geometry=geometry)) as run, \
+                 patch('modules.xrd.xrd_plots.make_xrd_plot', side_effect=plot):
+                response = self.client.post('/api/process_xrd', data={
+                    'file': (io.BytesIO(b'20 1\n21 2\n22 1\n'), 'standard.xy'),
+                    'method': 'gsas2', 'phases': '[]', 'instrument': 'none',
+                    'instrument_geometry': geometry,
+                    'instprm_file': (io.BytesIO(b'invalid stale upload'), 'old.instprm'),
+                    'output_dir': str(self.root)})
+                self.assertEqual(response.status_code, 200, response.json)
+                kwargs = run.call_args.kwargs
+                self.assertEqual(kwargs['instrument'], instrument)
+                profile = profiles.get_instrument_profile(kwargs['instrument'])
+                self.assertIsNone(profiles.instrument_file(profile))
+                self.assertEqual(profile['geometry'], geometry)
+                self.assertEqual(kwargs['phase']['a'], 5.431109)
+                self.assertEqual(kwargs['spectrum'], 'auto')
+                self.assertEqual(list(self.root.glob('*.instprm')), [])
+                self.assertIn('calibration_token', response.json)
 
 
 @unittest.skipUnless(backend.is_available(), 'GSAS-II is not installed')
@@ -245,7 +295,7 @@ class CalibrationIntegrationTests(unittest.TestCase):
             result = calibration.run_calibration(
                 tt, y, np.sqrt(np.maximum(y, 1)), phase, 1.540593,
                 tt_min=20, tt_max=90,
-                instrument='generic_capillary' if geometry == 'capillary' else 'generic_flat_plate',
+                instrument='generic_capillary' if geometry == 'capillary' else 'none',
                 spectrum='cu_doublet' if doublet else 'single',
                 output_instprm=str(root / 'calibrated.instprm'), keep_workdir=True)
             fitted = backend.G2sc.G2Project(result['project_path'])

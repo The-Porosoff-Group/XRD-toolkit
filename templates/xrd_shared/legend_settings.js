@@ -45,7 +45,7 @@ function xrdLegendLayout(location, plotData, phaseCount, mainBottom) {
 
 async function updateXrdLegendSelection(select) {
   const location = select.value;
-  const controls = ['xrd-legend-location', 'xrd-result-legend-location']
+  const controls = ['xrd-result-legend-location']
     .map(id => document.getElementById(id)).filter(Boolean);
   controls.forEach(control => { control.value = location; });
   const data = xrdLastResult;

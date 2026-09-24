@@ -741,7 +741,7 @@
         </div>
 
         <div class="card">
-          <div class="card-header"><div class="step">2</div><h2>Instrument Settings</h2></div>
+          <div class="card-header"><div class="step">2</div><h2>Scan Settings</h2></div>
           <div class="card-body" style="display:flex;flex-direction:column;gap:12px;">
             <div class="form-group">
               <label>X-ray Source</label>
@@ -773,13 +773,6 @@
                   Show figure title
                 </label>
                 <span style="font-size:11px;color:var(--muted);">Uncheck for no title on figures exported with the next fit. Use <code>_{...}</code> for subscripts and <code>^{...}</code> for superscripts, e.g. <code>CeZrO_{x}</code> or <code>Fe^{3+}</code>. Include the braces; no dollar signs are needed.</span>
-              </div>
-              <div class="form-group full">
-                <label for="xrd-legend-location">Legend location</label>
-                <select id="xrd-legend-location" onchange="updateXrdLegendSelection(this)">
-                  {% include 'xrd_shared/legend_options.html' %}
-                </select>
-                <span class="hint">Applies to the preview and both PNG exports. You can also change it after fitting.</span>
               </div>
               <div class="form-group">
                 <label for="xrd-size-reporting">Size reporting</label>
@@ -824,7 +817,6 @@
                 <option value="20">20 — heavy amorphous background</option>
               </select>
             </div>
-            {% include 'xrd_shared/instrument_controls.html' %}
           </div>
         </div>
       </div>
@@ -838,6 +830,7 @@
         </div>
         <div class="card-body" style="display:flex;flex-direction:column;gap:14px;">
 
+          <p id="xrd-calibration-phase-hint" style="display:none;margin:0;color:var(--muted);font-size:12px;">Calibration uses the built-in NIST Si 640g standard. Skip phase search, or select your instrument beside Run Refinement to fit sample phases.</p>
           <!-- Search inputs -->
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto auto;gap:10px;align-items:flex-end;min-width:0;">
             <div class="form-group">
@@ -979,7 +972,9 @@
             <label id="perf-recipe-label" style="display:none;">
               <input type="checkbox" id="xrd-perf-recipe">
             </label>
+            {% include 'xrd_shared/instrument_controls.html' %}
           </div>
+          {% include 'xrd_shared/calibration_help.html' %}
           <div class="xrd-preset-row">
             <span style="font-size:10px;color:var(--muted);font-weight:800;text-transform:uppercase;letter-spacing:.7px;">Presets</span>
             <select id="xrd-preset-select" title="Load a saved refinement recipe"></select>
@@ -1053,6 +1048,11 @@
               <b>WC/W2C Synergy-S production preset</b> ticks Quick constrained fit, Refine cell too, Phase isolation, Refine Zero, Free X, and Y ≥ 0;
               it sets WC PO to fixed [001] at 0.905 and leaves W2C uniform-cell scaling off unless you tick it in the W2C card.
             </div>
+            <div class="form-group" id="xrd-instprm-override" style="flex-basis:100%;margin-top:8px;">
+              <label for="xrd-instprm-file">Override instrument file — optional</label>
+              <input type="file" id="xrd-instprm-file" accept=".instprm" style="font-size:12px;">
+              <span class="hint">Uses the selected instrument's geometry. Leave empty to use its bundled calibration.</span>
+            </div>
           </div>
           <div style="font-size:11px;color:var(--muted);line-height:1.45;">
             <b style="color:var(--text);">GSAS-II refinement</b> fits the measured XRD pattern using the queued CIF structures,
@@ -1080,13 +1080,16 @@
             <div id="xrd-baseline-comparison"></div>
             <div id="xrd-reusable-fit"></div>
             <div id="xrd-phase-results"></div>
-            <div class="form-group" style="margin:14px 0;">
-              <label for="xrd-result-legend-location">Legend location</label>
-              <select id="xrd-result-legend-location" onchange="updateXrdLegendSelection(this)">
-                {% include 'xrd_shared/legend_options.html' %}
-              </select>
-              <span class="hint" id="xrd-legend-status" role="status">Changing the location updates both PNG exports without rerunning the fit.</span>
-            </div>
+            <details id="xrd-plot-settings" style="margin:14px 0;">
+              <summary style="cursor:pointer;font-size:13px;font-weight:600;">Plot settings</summary>
+              <div class="form-group" style="max-width:340px;margin-top:10px;">
+                <label for="xrd-result-legend-location">Legend location</label>
+                <select id="xrd-result-legend-location" onchange="updateXrdLegendSelection(this)">
+                  {% include 'xrd_shared/legend_options.html' %}
+                </select>
+                <span class="hint" id="xrd-legend-status" role="status">Updates the preview and both PNG exports without rerunning the fit.</span>
+              </div>
+            </details>
             <div id="xrd-interactive-plot" style="display:none;width:100%;height:540px;border-radius:8px;border:1px solid var(--border);"></div>
             <img class="plot-img" id="xrd-result-plot" src="" alt="XRD refinement plot"
                  style="display:none;">
@@ -1981,12 +1984,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (data.available) {
         const btn = document.getElementById('btn-xrd-gsas2');
         if (btn) btn.style.display = '';
-        // Show instrument parameter file upload (GSAS-II only)
+        // Show instrument selection (GSAS-II only)
         const instGrp = document.getElementById('instprm-group');
         if (instGrp) instGrp.style.display = '';
-        // Show calibration mode checkbox and instrument selector
-        const calLabel = document.getElementById('cal-mode-label');
-        if (calLabel) calLabel.style.display = '';
         const advBtn = document.getElementById('xrd-advanced-toggle');
         if (advBtn) advBtn.style.display = '';
         const verifyLabel = document.getElementById('verify-mode-label');
@@ -2645,7 +2645,7 @@ function applyWcW2cPresetPhaseOptions() {
 function renderSelectedPhases() {
   _ensurePhaseOptions();
   const stdRecipe = document.getElementById('xrd-standard-recipe');
-  if (!document.getElementById('xrd-calibration-mode').checked && ((stdRecipe && stdRecipe.checked) || xrdActiveRecipeKey === 'wc_w2c_synergy_s')) {
+  if (!isXrdCalibration() && ((stdRecipe && stdRecipe.checked) || xrdActiveRecipeKey === 'wc_w2c_synergy_s')) {
     applyWcW2cPresetPhaseOptions();
   }
   const wrap = document.getElementById('xrd-selected-wrap');
@@ -2757,7 +2757,6 @@ function renderSelectedPhases() {
 }
 
 const XRD_PRESET_CHECKBOX_IDS = [
-  'xrd-calibration-mode',
   'xrd-verification-mode',
   'xrd-verify-cell',
   'xrd-phase-isolation',
@@ -2817,11 +2816,9 @@ function getXrdControlState() {
     n_bg_coeffs: document.getElementById('xrd-bg-coeffs')?.value || 'auto',
     size_reporting_mode: document.getElementById('xrd-size-reporting')?.value || 'both',
     scherrer_k: document.getElementById('xrd-scherrer-k')?.value || '0.9',
-    legend_location: document.getElementById('xrd-legend-location')?.value || 'best',
-    instrument: document.getElementById('xrd-instrument')?.value || 'generic_flat_plate',
-    spectrum: document.getElementById('xrd-spectrum')?.value || 'auto',
-    instrument_geometry: document.getElementById('xrd-upload-geometry')?.value || 'bragg_brentano',
-    calibration_polariz: document.getElementById('xrd-calibration-polariz')?.value || '0.5',
+    legend_location: document.getElementById('xrd-result-legend-location')?.value || 'best',
+    instrument: document.getElementById('xrd-instrument')?.value || 'none',
+    instrument_geometry: document.getElementById('xrd-calibration-geometry')?.value || 'bragg_brentano',
     fix_y_value: document.getElementById('xrd-fix-y-value')?.value || '',
     checkboxes: {},
   };
@@ -2844,18 +2841,13 @@ function applyXrdControlState(controls = {}) {
   setVal('xrd-bg-coeffs', controls.n_bg_coeffs);
   setVal('xrd-size-reporting', controls.size_reporting_mode || 'both');
   setVal('xrd-scherrer-k', controls.scherrer_k ?? '0.90');
-  setVal('xrd-legend-location', controls.legend_location || 'best');
-  setVal('xrd-instrument', controls.instrument);
-  setVal('xrd-spectrum', controls.spectrum || 'auto');
-  setVal('xrd-upload-geometry', controls.instrument_geometry || 'bragg_brentano');
-  setVal('xrd-calibration-polariz', controls.calibration_polariz || '0.5');
-  xrdInstrumentChanged(false);
+  setVal('xrd-result-legend-location', controls.legend_location || 'best');
+  restoreXrdInstrument(controls);
   setVal('xrd-fix-y-value', controls.fix_y_value);
   Object.entries(controls.checkboxes || {}).forEach(([id, checked]) => {
     const el = document.getElementById(id);
     if (el) el.checked = !!checked;
   });
-  xrdCalibrationChanged();
   const stdRecipe = document.getElementById('xrd-standard-recipe');
   if (stdRecipe) stdRecipe.checked = false;
 }
@@ -3044,7 +3036,7 @@ async function runXRD(method) {
   errEl.classList.remove('visible');
 
   if (!xrdFile)        { showXrdError('Upload an XRD data file first.'); return; }
-  if (!xrdPhases.length && !document.getElementById('xrd-calibration-mode').checked){ showXrdError('Add at least one phase to refine.'); return; }
+  if (!xrdPhases.length && !isXrdCalibration()){ showXrdError('Add at least one phase to refine.'); return; }
 
   const legacyLeBailBtn = document.getElementById('btn-xrd');
   if (legacyLeBailBtn) legacyLeBailBtn.disabled = true;
@@ -3055,43 +3047,20 @@ async function runXRD(method) {
   document.getElementById('xrd-progress-wrap').classList.add('visible');
 
   const stdRecipe = document.getElementById('xrd-standard-recipe');
-  if (!document.getElementById('xrd-calibration-mode').checked && ((stdRecipe && stdRecipe.checked) || xrdActiveRecipeKey === 'wc_w2c_synergy_s')) {
+  if (!isXrdCalibration() && ((stdRecipe && stdRecipe.checked) || xrdActiveRecipeKey === 'wc_w2c_synergy_s')) {
     applyWcW2cPresetGlobals(true);
     applyWcW2cPresetPhaseOptions();
     renderSelectedPhases();
   }
 
-  const methodLabel = {rietveld:'Rietveld', gsas2:'GSAS-II'}[method] || 'Le Bail';
-  const steps = method === 'gsas2' ? [
-    'Parsing data file...',
-    'Validating CIF structures...',
-    'GSAS-II: building project...',
-    'GSAS-II: refining background + scale...',
-    'GSAS-II: refining profile parameters...',
-    'GSAS-II: refining cell + atoms...',
-    'Extracting results and generating plots...',
-  ] : method === 'rietveld' ? [
-    'Parsing data file...',
-    'Validating phase structures...',
-    'Computing structure factors from CIF...',
-    'Optimising per-phase scale factors...',
-    'Computing Rwp, Rp, χ², crystallite sizes...',
-    'Generating plots...',
-  ] : [
-    'Parsing data file...',
-    'Validating phase structures...',
-    'Computing structure factors with pymatgen...',
-    'Running Le Bail intensity partitioning...',
-    'Refining cell parameters and peak shape...',
-    'Computing Rwp, Rp, χ², crystallite sizes...',
-    'Generating plots...',
-  ];
-  let si = 0;
-  document.getElementById('xrd-progress-text').textContent = `${methodLabel}: ${steps[0]}`;
-  const timer = setInterval(() => {
-    si = (si+1) % steps.length;
-    document.getElementById('xrd-progress-text').textContent = `${methodLabel}: ${steps[si]}`;
-  }, 3000);
+  const methodLabel = isXrdCalibration() ? 'Calibrating NIST Si 640g' : 'Running refinement';
+  const startedAt = Date.now();
+  const updateProgress = () => {
+    const seconds = Math.floor((Date.now() - startedAt) / 1000);
+    document.getElementById('xrd-progress-text').textContent = `${methodLabel}… ${seconds}s elapsed`;
+  };
+  updateProgress();
+  const timer = setInterval(updateProgress, 1000);
 
   try {
     const fd = new FormData();
@@ -3103,7 +3072,7 @@ async function runXRD(method) {
     fd.append('sample_id',   document.getElementById('xrd-sample-id').value || xrdFile.name);
     fd.append('figure_title', document.getElementById('xrd-figure-title').value.trim());
     fd.append('show_figure_title', document.getElementById('xrd-show-figure-title').checked);
-    fd.append('legend_location', document.getElementById('xrd-legend-location').value);
+    fd.append('legend_location', document.getElementById('xrd-result-legend-location').value);
     fd.append('tt_min',      document.getElementById('xrd-tt-min').value);
     fd.append('tt_max',      document.getElementById('xrd-tt-max').value);
     fd.append('n_bg_coeffs', document.getElementById('xrd-bg-coeffs').value || 'auto');
@@ -3116,11 +3085,6 @@ async function runXRD(method) {
     fd.append('output_dir',  document.getElementById('xrd-output-dir').value);
     fd.append('method',      method);
     appendXrdInstrumentSettings(fd);
-    // Calibration mode — refine instrument profile from standard
-    const calCheckbox = document.getElementById('xrd-calibration-mode');
-    if (calCheckbox && calCheckbox.checked) {
-      fd.append('calibration_mode', 'true');
-    }
     // Verification mode — skip cell/Uiso/size stages (GSAS-II only)
     const verifyCheckbox = document.getElementById('xrd-verification-mode');
     if (verifyCheckbox && verifyCheckbox.checked) {
@@ -3213,7 +3177,7 @@ async function runXRD(method) {
     document.getElementById('xrd-progress-wrap').classList.remove('visible');
     if (e.name === 'AbortError') {
       showXrdError('Refinement timed out after 5 minutes.\n\n'
-        + 'Try reducing the 2θ range, using fewer phases, or using Le Bail instead of Rietveld.\n'
+        + 'Check the server log for details. A smaller 2θ range or fewer phases may reduce fitting time.\n'
         + 'If running via "python app.py", use run.bat instead — it sets up an optimised environment.');
     } else if (e.message === 'Failed to fetch') {
       showXrdError('Connection to server lost during refinement.\n\n'
@@ -3731,7 +3695,7 @@ function renderXrdPublicationPlot(data) {
     const sample = document.getElementById('xrd-sample-id')?.value || xrdFile?.name || 'Sample';
     const figureTitle = document.getElementById('xrd-figure-title')?.value.trim() || sample;
     const showFigureTitle = document.getElementById('xrd-show-figure-title')?.checked ?? true;
-    const legendLocation = data.legend_location || document.getElementById('xrd-legend-location')?.value || 'best';
+    const legendLocation = data.legend_location || document.getElementById('xrd-result-legend-location')?.value || 'best';
     const legendPosition = xrdLegendLayout(legendLocation, pd, phases.length, mainBottom);
     const stats = data.statistics || {};
     const statsTitle = `Rwp ${stats.Rwp ?? '—'} % · Rp ${stats.Rp ?? '—'} % · χ² ${stats.chi2 ?? '—'} · GoF ${stats.GoF ?? '—'}`;
@@ -3774,7 +3738,7 @@ function renderXrdPublicationPlot(data) {
 function showXRDResults(data) {
   xrdLastResult = data;
   renderXrdCalibrationResult(data);
-  ['xrd-legend-location', 'xrd-result-legend-location'].forEach(id => {
+  ['xrd-result-legend-location'].forEach(id => {
     document.getElementById(id).value = data.legend_location || 'best';
   });
   document.getElementById('xrd-legend-status').textContent = 'Changing the location updates both PNG exports without rerunning the fit.';
@@ -3799,7 +3763,7 @@ function showXRDResults(data) {
   sg.innerHTML = '';
   const statBoxes = [
     {l:'Rwp',v:st.Rwp+'%'}, {l:'Rp',v:st.Rp+'%'}, {l:'χ²',v:st.chi2},
-    {l:'GoF',v:st.GoF}, {l:'Zero shift',v:data.zero_shift+'°'}
+    {l:'GoF',v:st.GoF}, {l:'Zero shift',v:Number.isFinite(data.zero_shift) ? data.zero_shift.toFixed(5)+'°' : '—'}
   ];
   // Sample displacement (Shift for BB, DisplaceY for capillary).
   // Surfaces the cell-vs-displacement trade-off in verify+cell runs.
@@ -3969,8 +3933,9 @@ function resetXRD() {
   document.getElementById('xrd-show-figure-title').checked = true;
   document.getElementById('xrd-size-reporting').value = 'both';
   document.getElementById('xrd-scherrer-k').value = '0.90';
-  document.getElementById('xrd-legend-location').value = 'best';
   document.getElementById('xrd-result-legend-location').value = 'best';
+  document.getElementById('xrd-plot-settings').open = false;
+  restoreXrdInstrument({instrument:'none'});
   document.getElementById('xrd-figure-title').disabled = false;
   document.getElementById('xrd-candidates-wrap').style.display = 'none';
   document.getElementById('xrd-selected-wrap').style.display = 'none';
