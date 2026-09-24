@@ -60,6 +60,7 @@ if _missing:
 import numpy as np
 import yaml
 from flask import Flask, render_template, request, jsonify, send_file
+from toolkit_version import APP_VERSION
 from flask.json.provider import DefaultJSONProvider
 
 
@@ -179,6 +180,8 @@ _cache = get_cache(cache_dir=CACHE_DIR, max_size_mb=CACHE_MAX_MB)
 _CHARACTERIZATION_CACHE_MAX = 4
 _xrd_plot_cache = OrderedDict()
 _xrd_plot_cache_lock = Lock()
+_xrd_calibration_cache = OrderedDict()
+_xrd_calibration_cache_lock = Lock()
 
 
 def _store_characterization_context(cache, lock, context):
@@ -223,6 +226,7 @@ if CONFIG['performance'].get('preload_pymatgen', True):
 
 # ── Flask app ─────────────────────────────────────────────────────────────────
 app = Flask(__name__)
+app.jinja_env.globals['app_version'] = APP_VERSION
 app.json_provider_class = NumpyJSONProvider
 app.json = NumpyJSONProvider(app)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
@@ -246,7 +250,7 @@ MODULES = [
 def index():
     reaction_configs = gc_processor.list_reaction_configs(
         os.path.join(MODULES_DIR, 'reaction_configs'))
-    return render_template('index.html',
+    return render_template('xrd_toolkit/index.html',
                            modules=MODULES,
                            reaction_configs=reaction_configs,
                            mp_key_set=bool(MP_API_KEY),
@@ -1163,6 +1167,42 @@ def xrd_delete_preset(preset_id):
     return jsonify({'ok': True})
 
 
+@app.route('/api/xrd/instruments', methods=['GET', 'POST'])
+def xrd_instruments():
+    from modules.xrd.instrument_profiles import (
+        get_instrument_profiles, save_local_instrument, DEFAULT_INSTRUMENT)
+    if request.method == 'GET':
+        return jsonify({'default': DEFAULT_INSTRUMENT, 'instruments': [
+            dict(profile, id=key) for key, profile in get_instrument_profiles().items()]})
+    try:
+        token = request.form.get('calibration_token', '')
+        context = None
+        if token:
+            context = _get_characterization_context(
+                _xrd_calibration_cache, _xrd_calibration_cache_lock, token)
+            if context is None:
+                return jsonify({'error': 'Calibration result expired. Download and upload the candidate file to save it.'}), 400
+            if not context['validation'].get('passed'):
+                return jsonify({'error': 'This candidate failed parameter checks. Correct the calibration before saving it as an instrument.'}), 400
+            content = context['content']
+            geometry = context['geometry']
+        else:
+            upload = request.files.get('instprm_file')
+            if not upload or not upload.filename.lower().endswith('.instprm'):
+                return jsonify({'error': 'Choose a GSAS-II .instprm file.'}), 400
+            content = upload.read(100001)
+            geometry = request.form.get('geometry', '')
+        key = save_local_instrument(
+            request.form.get('label', ''), geometry, content,
+            calibration_range=context['fit_range'] if context else None,
+            provenance='Si 640g calibration candidate; review fit' if context else 'uploaded')
+        return jsonify({'instrument': key, 'profile': get_instrument_profiles()[key]})
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except OSError:
+        return jsonify({'error': 'Could not save the instrument in local_instruments. Check folder permissions.'}), 500
+
+
 @app.route('/api/process_xrd', methods=['POST'])
 def process_xrd():
     print("\n=== /api/process_xrd START ===", flush=True)
@@ -1196,6 +1236,12 @@ def process_xrd():
         wl_label   = form.get('wavelength_label', f'λ={wavelength:.5f} Å')
 
         phases = json.loads(form.get('phases', '[]'))
+        calibration_mode = form.get('calibration_mode', '').lower() == 'true'
+        if calibration_mode and form.get('method') == 'gsas2':
+            from modules.xrd.instrument_profiles import silicon_640g_phase
+            if form.get('calibration_standard', 'Si640g') != 'Si640g':
+                return jsonify({'error': 'Built-in calibration currently supports NIST Si 640g. Import an external .instprm for other standards.'}), 400
+            phases = [silicon_640g_phase()]
         if not phases:
             return jsonify({'error': 'No phases selected for refinement.'}), 400
 
@@ -1222,19 +1268,40 @@ def process_xrd():
             if text:
                 ph['cif_text'] = text
 
-        # Optional instrument parameter file for GSAS-II
+        from modules.xrd.instrument_profiles import get_instrument_profile, parse_instprm
+        instrument = form.get('instrument', 'generic_flat_plate').strip() or 'generic_flat_plate'
+        if instrument == 'upload':
+            instrument = ('generic_capillary' if form.get('instrument_geometry') == 'capillary'
+                          else 'generic_flat_plate')
+            if not calibration_mode and not request.files.get('instprm_file'):
+                return jsonify({'error': 'Choose a .instprm file to upload.'}), 400
+        if instrument != 'auto':
+            try:
+                get_instrument_profile(instrument)
+            except ValueError as exc:
+                return jsonify({'error': str(exc)}), 400
+        spectrum = form.get('spectrum', 'auto')
+        if spectrum not in ('auto', 'cu_doublet', 'single'):
+            return jsonify({'error': 'Choose a supported radiation spectrum.'}), 400
+        # Calibration always starts fresh; uploads are only for sample fitting.
         instprm_file_path = None
-        if 'instprm_file' in request.files:
-            instprm_f = request.files['instprm_file']
-            if instprm_f.filename:
-                safe_instprm = re.sub(r'[^\w\-.]', '_', instprm_f.filename)
-                instprm_file_path = os.path.join(UPLOAD_DIR, safe_instprm)
-                instprm_f.save(instprm_file_path)
+        instprm_f = request.files.get('instprm_file')
+        if instprm_f and instprm_f.filename and not calibration_mode:
+            try:
+                content = instprm_f.read(100001)
+                values = parse_instprm(content)
+            except ValueError as exc:
+                return jsonify({'error': str(exc)}), 400
+            instprm_file_path = os.path.join(UPLOAD_DIR, secrets.token_hex(12) + '.instprm')
+            with open(instprm_file_path, 'wb') as profile_output:
+                profile_output.write(content)
+            wavelength = values.get('Lam', values.get('Lam1'))
+            wl_label = f'λ={wavelength:.6f} Å (instrument file)'
 
         output_base = form.get('output_dir', '').strip()
         if not output_base or not os.path.isdir(output_base):
             output_base = os.path.join(BASE_DIR, 'results')
-        ts      = datetime.now().strftime('%Y%m%d_%H%M%S')
+        ts      = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
         safe_id = re.sub(r'[^\w\-]', '_', os.path.splitext(sample_id)[0])
         out_dir = os.path.join(output_base, f'XRD_{safe_id}_{ts}')
         analysis_date = datetime.now().strftime('%Y-%m-%d')
@@ -1270,19 +1337,8 @@ def process_xrd():
                     cal_phase['cif_text'] = text
                     break
 
-            # Override cell to NIST SRM 640g certified value for Si.
-            # Only apply for SG 227 (Fd-3m / Si / Ge / diamond).
-            _cal_sg = int(cal_phase.get('spacegroup_number', 0) or 0)
-            if _cal_sg == 227:
-                cal_phase['a'] = 5.431109
-                cal_phase['b'] = 5.431109
-                cal_phase['c'] = 5.431109
-                cal_phase['alpha'] = 90.0
-                cal_phase['beta']  = 90.0
-                cal_phase['gamma'] = 90.0
-
             # Instrument from form (or auto-detect)
-            _cal_instrument = form.get('instrument', '').strip().lower()
+            _cal_instrument = instrument
             if _cal_instrument in ('', 'auto'):
                 from modules.xrd.gsasii_backend import infer_instrument
                 _cal_instrument, _cal_reason = infer_instrument(
@@ -1302,6 +1358,9 @@ def process_xrd():
                                 if form.get('n_bg_coeffs', 'auto') != 'auto'
                                 else 6),
                 instrument=_cal_instrument,
+                spectrum=spectrum,
+                polariz=float(form.get('calibration_polariz', '0.5')),
+                output_instprm=os.path.join(out_dir, 'Si640g.instprm'),
                 keep_workdir=True,
             )
 
@@ -1379,7 +1438,25 @@ def process_xrd():
                 {'result': _xrd_plot_arrays(plot_result), 'metadata': cal_metadata,
                  'plot_paths': plot_paths, 'plot_theme': plot_theme})
 
+            calibration_token = _store_characterization_context(
+                _xrd_calibration_cache, _xrd_calibration_cache_lock, {
+                    'content': cal_result['instprm_text'],
+                    'geometry': cal_result['geometry'],
+                    'fit_range': cal_result['fit_range'],
+                    'validation': cal_result['validation'],
+                })
+            if cal_result.get('project_path'):
+                import shutil
+                calibration_project = os.path.join(out_dir, 'Si640g_calibration.gpx')
+                shutil.copy2(cal_result['project_path'], calibration_project)
+            else:
+                calibration_project = None
             return jsonify({
+                'calibration_token': calibration_token,
+                'calibration_name': form.get('calibration_name', '').strip() or 'Si 640g calibration',
+                'instrument': _cal_instrument,
+                'geometry': cal_result['geometry'],
+                'project_path': calibration_project,
                 'plot_b64':      plot_b64,
                 'plot_path':     plot_path,
                 'plot_paths':    plot_paths,
@@ -1450,7 +1527,8 @@ def process_xrd():
                 'size_reporting_mode': size_reporting['mode'],
                 'scherrer_k': size_reporting['scherrer_k'],
                 'instprm_file':     instprm_file_path,
-                'instrument':       form.get('instrument', 'auto'),
+                'instrument':       instrument,
+                'spectrum':         spectrum,
                 # Verification mode (GSAS-II only): skip cell/Uiso/size
                 # stages and refine only bg + scales + displacement + Y.
                 # Use for first-pass tests when peak positions or widths
@@ -1702,7 +1780,7 @@ if __name__ == '__main__':
         _gsas_status = 'not installed'
 
     print("\n" + "━"*50)
-    print("  Catalysis Data Toolkit")
+    print(f"  XRD Fitting Toolkit v{APP_VERSION}")
     print(f"  pymatgen:          {'ready' if _pymatgen_ready else 'not installed'}")
     print(f"  GSAS-II:           {_gsas_status}")
     print(f"  Materials Project: {'configured' if MP_API_KEY else 'no API key'}")

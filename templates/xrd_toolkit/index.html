@@ -500,7 +500,7 @@
   <!-- Header -->
   <header>
     <div class="logo">XRD<span>Toolkit</span></div>
-    <div class="badge">standalone XRD GUI</div>
+    <div class="badge">v{{ app_version }} · standalone XRD GUI</div>
   </header>
 
   <!-- Sidebar -->
@@ -824,17 +824,7 @@
                 <option value="20">20 — heavy amorphous background</option>
               </select>
             </div>
-            <div class="form-group" id="instprm-group" style="display:none;">
-              <label title="Upload a GSAS-II .instprm file from your instrument calibration. If not provided, default profile parameters will be used as starting guesses (U=2, V=−2, W=5) and refined during fitting.">
-                Instrument Parameters <span style="color:var(--muted);font-weight:400;"> — optional, GSAS-II only</span>
-              </label>
-              <input type="file" id="xrd-instprm-file" accept=".instprm,.prm,.inst"
-                     style="font-size:12px;">
-              <span style="font-size:11px;color:var(--muted);">
-                Upload your GSAS-II .instprm file for accurate profile parameters.
-                Without this, default values are used as initial guesses and refined.
-              </span>
-            </div>
+            {% include 'xrd_shared/instrument_controls.html' %}
           </div>
         </div>
       </div>
@@ -989,11 +979,6 @@
             <label id="perf-recipe-label" style="display:none;">
               <input type="checkbox" id="xrd-perf-recipe">
             </label>
-            <select id="xrd-instrument" style="display:none;margin-left:8px;font-size:12px;padding:2px 6px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;" title="Select instrument for geometry, displacement model, and .instprm auto-loading">
-              <option value="auto">Instrument: Auto</option>
-              <option value="smartlab">Rigaku SmartLab (BB)</option>
-              <option value="synergy_s">Synergy-S (capillary)</option>
-            </select>
           </div>
           <div class="xrd-preset-row">
             <span style="font-size:10px;color:var(--muted);font-weight:800;text-transform:uppercase;letter-spacing:.7px;">Presets</span>
@@ -1006,10 +991,6 @@
           <!-- Advanced settings row: hidden by default; toggled by the "▶ GSAS controls" button above. -->
           <div id="xrd-advanced-row" style="display:none;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px;padding:8px;border:1px dashed var(--border);border-radius:6px;background:rgba(255,255,255,0.02);">
             <span style="font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-right:4px;">GSAS-II controls:</span>
-            <label id="cal-mode-label" style="display:none;font-size:12px;color:var(--muted);cursor:pointer;" title="Calibration mode: refine instrument profile from a line standard (e.g. NIST Si 640g). Cell is fixed, U/V/W/X/Y/Zero/SH/L are refined sequentially.">
-              <input type="checkbox" id="xrd-calibration-mode" style="margin-right:4px;">
-              Calibration (instprm)
-            </label>
             <label id="verify-mode-label" style="display:none;font-size:12px;color:var(--muted);cursor:pointer;" title="Quick constrained fit: refine background, phase scales, sample displacement/zero, and Y peak width only. Cell, atom positions, Uiso, and per-phase size stay fixed so bad CIFs or wrong peak positions are not hidden.">
               <input type="checkbox" id="xrd-verification-mode" style="margin-right:4px;">
               Quick constrained fit
@@ -1109,6 +1090,7 @@
             <div id="xrd-interactive-plot" style="display:none;width:100%;height:540px;border-radius:8px;border:1px solid var(--border);"></div>
             <img class="plot-img" id="xrd-result-plot" src="" alt="XRD refinement plot"
                  style="display:none;">
+            <div id="xrd-calibration-result" style="display:none;padding:12px;border:1px solid var(--border);border-radius:6px;margin-bottom:12px;"></div>
             <div class="download-row" id="xrd-download-row"></div>
           </div>
 
@@ -1975,6 +1957,7 @@ function updateSourceBadge() {
 {% include 'xrd_shared/legend_settings.js' %}
 
 // Toggle the GSAS-II Advanced settings row (collapsed by default).
+{% include 'xrd_shared/instrument_settings.js' %}
 // The contents are individually revealed when GSAS-II is available;
 // this function controls the wrapper visibility independently.
 function toggleXrdAdvanced() {
@@ -2662,7 +2645,7 @@ function applyWcW2cPresetPhaseOptions() {
 function renderSelectedPhases() {
   _ensurePhaseOptions();
   const stdRecipe = document.getElementById('xrd-standard-recipe');
-  if ((stdRecipe && stdRecipe.checked) || xrdActiveRecipeKey === 'wc_w2c_synergy_s') {
+  if (!document.getElementById('xrd-calibration-mode').checked && ((stdRecipe && stdRecipe.checked) || xrdActiveRecipeKey === 'wc_w2c_synergy_s')) {
     applyWcW2cPresetPhaseOptions();
   }
   const wrap = document.getElementById('xrd-selected-wrap');
@@ -2835,7 +2818,10 @@ function getXrdControlState() {
     size_reporting_mode: document.getElementById('xrd-size-reporting')?.value || 'both',
     scherrer_k: document.getElementById('xrd-scherrer-k')?.value || '0.9',
     legend_location: document.getElementById('xrd-legend-location')?.value || 'best',
-    instrument: document.getElementById('xrd-instrument')?.value || 'auto',
+    instrument: document.getElementById('xrd-instrument')?.value || 'generic_flat_plate',
+    spectrum: document.getElementById('xrd-spectrum')?.value || 'auto',
+    instrument_geometry: document.getElementById('xrd-upload-geometry')?.value || 'bragg_brentano',
+    calibration_polariz: document.getElementById('xrd-calibration-polariz')?.value || '0.5',
     fix_y_value: document.getElementById('xrd-fix-y-value')?.value || '',
     checkboxes: {},
   };
@@ -2860,11 +2846,16 @@ function applyXrdControlState(controls = {}) {
   setVal('xrd-scherrer-k', controls.scherrer_k ?? '0.90');
   setVal('xrd-legend-location', controls.legend_location || 'best');
   setVal('xrd-instrument', controls.instrument);
+  setVal('xrd-spectrum', controls.spectrum || 'auto');
+  setVal('xrd-upload-geometry', controls.instrument_geometry || 'bragg_brentano');
+  setVal('xrd-calibration-polariz', controls.calibration_polariz || '0.5');
+  xrdInstrumentChanged(false);
   setVal('xrd-fix-y-value', controls.fix_y_value);
   Object.entries(controls.checkboxes || {}).forEach(([id, checked]) => {
     const el = document.getElementById(id);
     if (el) el.checked = !!checked;
   });
+  xrdCalibrationChanged();
   const stdRecipe = document.getElementById('xrd-standard-recipe');
   if (stdRecipe) stdRecipe.checked = false;
 }
@@ -3053,7 +3044,7 @@ async function runXRD(method) {
   errEl.classList.remove('visible');
 
   if (!xrdFile)        { showXrdError('Upload an XRD data file first.'); return; }
-  if (!xrdPhases.length){ showXrdError('Add at least one phase to refine.'); return; }
+  if (!xrdPhases.length && !document.getElementById('xrd-calibration-mode').checked){ showXrdError('Add at least one phase to refine.'); return; }
 
   const legacyLeBailBtn = document.getElementById('btn-xrd');
   if (legacyLeBailBtn) legacyLeBailBtn.disabled = true;
@@ -3064,7 +3055,7 @@ async function runXRD(method) {
   document.getElementById('xrd-progress-wrap').classList.add('visible');
 
   const stdRecipe = document.getElementById('xrd-standard-recipe');
-  if ((stdRecipe && stdRecipe.checked) || xrdActiveRecipeKey === 'wc_w2c_synergy_s') {
+  if (!document.getElementById('xrd-calibration-mode').checked && ((stdRecipe && stdRecipe.checked) || xrdActiveRecipeKey === 'wc_w2c_synergy_s')) {
     applyWcW2cPresetGlobals(true);
     applyWcW2cPresetPhaseOptions();
     renderSelectedPhases();
@@ -3124,11 +3115,7 @@ async function runXRD(method) {
     fd.append('scherrer_k', String(scherrerK));
     fd.append('output_dir',  document.getElementById('xrd-output-dir').value);
     fd.append('method',      method);
-    // Instrument selection
-    const instSelect = document.getElementById('xrd-instrument');
-    if (instSelect) {
-      fd.append('instrument', instSelect.value);
-    }
+    appendXrdInstrumentSettings(fd);
     // Calibration mode — refine instrument profile from standard
     const calCheckbox = document.getElementById('xrd-calibration-mode');
     if (calCheckbox && calCheckbox.checked) {
@@ -3194,11 +3181,6 @@ async function runXRD(method) {
     const refineXyzCheckbox = document.getElementById('xrd-refine-xyz');
     if (refineXyzCheckbox && refineXyzCheckbox.checked) {
       fd.append('refine_xyz', 'true');
-    }
-    // Include instrument parameter file if provided (GSAS-II only)
-    const instprmInput = document.getElementById('xrd-instprm-file');
-    if (instprmInput && instprmInput.files.length > 0) {
-      fd.append('instprm_file', instprmInput.files[0]);
     }
     // Send cached phases without CIF text; keep manual/generated uploads
     // inline because they do not exist in the server-side CIF cache.
@@ -3791,6 +3773,7 @@ function renderXrdPublicationPlot(data) {
 
 function showXRDResults(data) {
   xrdLastResult = data;
+  renderXrdCalibrationResult(data);
   ['xrd-legend-location', 'xrd-result-legend-location'].forEach(id => {
     document.getElementById(id).value = data.legend_location || 'best';
   });

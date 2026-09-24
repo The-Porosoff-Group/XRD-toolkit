@@ -236,39 +236,10 @@ def _hm_symbol_to_number(symbol):
 #   1. Auto-detect from filename/header/metadata via infer_instrument().
 #   2. Override explicitly via params['instrument'] = 'smartlab'.
 #   3. Fall back to DEFAULT_INSTRUMENT if inference fails.
-INSTRUMENT_PROFILES = {
-    'synergy_s': {
-        'label':    'Synergy-S capillary/transmission',
-        'geometry': 'capillary',
-        'displacement_param': 'DisplaceY',
-        'zero_seed': -0.25,    # from Synergy-Dualflex .par (WC/W2C config)
-        'polariz':  0.5,
-        'sh_l':     0.002,
-        'preferred_orientation_default': 'off',
-        'sigma_inflation_K': 5.0,  # 2D-integrated σ underestimates uncertainty
-        'instprm_filename': 'synergy_s_Si640g.instprm',
-        'notes': 'Measured from NIST SRM 640g Si standard.',
-    },
-    'smartlab': {
-        'label':    'Rigaku SmartLab flat plate / Bragg-Brentano',
-        'geometry': 'bragg_brentano',
-        'displacement_param': 'Shift',
-        'zero_seed': -0.027,   # measured from NIST Si 640g
-        'polariz':  0.7,       # SmartLab manual calibration profile
-        'sh_l':     0.002,     # SmartLab manual calibration profile
-        'calibration_allow_x': False,
-        'calibration_allow_y': False,
-        'calibration_refine_sh_l': False,
-        'calibration_fixed_sh_l': 0.002,
-        'calibration_u_min_rwp_gain': 0.0,
-        'calibration_v_min_rwp_gain': 0.0,
-        'preferred_orientation_default': 'auto',
-        'sigma_inflation_K': 1.0,  # σ ≈ √I is already correct for BB
-        'instprm_filename': 'smartlab_Si640g.instprm',  # auto-locate
-        'notes': 'Measured from NIST SRM 640g Si standard, 2026-04-30.',
-    },
-}
-DEFAULT_INSTRUMENT = 'smartlab'
+from .instrument_profiles import (
+    INSTRUMENT_PROFILES, DEFAULT_INSTRUMENT, get_instrument_profile,
+    instrument_file, parse_instprm, configure_histogram_geometry,
+)
 
 
 def _sample_displacement_parameter(geometry):
@@ -304,15 +275,15 @@ def infer_instrument(filepath=None, metadata=None, raw_header=None):
     # Strong filename/header hints
     if 'synergy' in text or 'crysalis' in text or 'dualflex' in text:
         return 'synergy_s', 'filename/header contains Synergy/CrysAlis/Dualflex'
-    if 'smartlab' in text or 'rigaku' in text:
-        return 'smartlab', 'filename/header contains SmartLab/Rigaku'
+    if 'smartlab' in text:
+        return 'smartlab', 'filename/header explicitly contains SmartLab'
 
-    # Weak format hints
+    # Weak format hints identify geometry, not a manufacturer's calibration.
     fmt = str(metadata.get('format', '')).lower()
     if fmt == 'stepscan':
-        return 'smartlab', 'weak inference from StepScan format'
+        return 'generic_flat_plate', 'flat-plate starting profile inferred from StepScan format'
     if fmt == 'powdergraph':
-        return 'synergy_s', 'weak inference from PowderGraph/integrated format'
+        return 'generic_capillary', 'transmission starting profile inferred from integrated format'
 
     return DEFAULT_INSTRUMENT, (
         f'default fallback ({DEFAULT_INSTRUMENT}); '
@@ -2122,7 +2093,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
     # set of defaults.  Explicit params (polariz=, sh_l=) override profile.
     instrument = instrument or DEFAULT_INSTRUMENT
     instrument_reason = instrument_reason or 'default'
-    profile = INSTRUMENT_PROFILES.get(instrument, INSTRUMENT_PROFILES[DEFAULT_INSTRUMENT])
+    profile = get_instrument_profile(instrument)
 
     print(f"  Instrument: {profile['label']}", flush=True)
     print(f"    Selection: {instrument_reason}", flush=True)
@@ -2466,7 +2437,12 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
     # widths from the actual data.  The estimator already measures the
     # total apparent FWHM, which GSAS-II will then deconvolve correctly
     # once the Kα1/Kα2 pair is being forward-modelled.
-    _use_doublet = _is_cu_kalpha(wavelength)
+    spectrum = options.get('spectrum', 'auto')
+    if spectrum not in ('auto', 'cu_doublet', 'single'):
+        raise ValueError('Choose Cu Kα1/Kα2 or a single wavelength.')
+    if spectrum == 'cu_doublet' and not _is_cu_kalpha(wavelength) and not instprm_file:
+        raise ValueError('Cu Kα1/Kα2 requires a Cu wavelength (about 1.5406 Å).')
+    _use_doublet = _is_cu_kalpha(wavelength) and spectrum != 'single'
     _seed_active = (seed_params is not None) and (not _use_doublet)
     if _seed_active is False and seed_params is not None and _use_doublet:
         print(f"  Skipping single-wavelength seed params "
@@ -2477,7 +2453,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
     # explicitly provided.  Searches relative to the toolkit root
     # (two levels up from this module file).
     if not instprm_file:
-        _profile_instprm = profile.get('instprm_filename')
+        _profile_instprm = instrument_file(profile)
         if _profile_instprm:
             _module_dir = os.path.dirname(os.path.abspath(__file__))
             _toolkit_root = os.path.dirname(os.path.dirname(_module_dir))
@@ -2498,6 +2474,9 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
     _measured_instprm = False  # True when U/V/W/X/Y should be FIXED
 
     if instprm_file and os.path.isfile(instprm_file):
+        with open(instprm_file, 'rb') as profile_input:
+            _file_parameters = parse_instprm(profile_input.read())
+            _use_doublet = 'Lam2' in _file_parameters
         import shutil
         instprm_path = os.path.join(work_dir, 'instrument.instprm')
         shutil.copy2(instprm_file, instprm_path)
@@ -2537,7 +2516,8 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                                        polariz=polariz, sh_l=sh_l,
                                        u=est_u, v=est_v, w=est_w,
                                        x=est_x, y=est_y,
-                                       zero_seed=profile.get('zero_seed', 0.0))
+                                       zero_seed=profile.get('zero_seed', 0.0),
+                                       kalpha2=_use_doublet)
     else:
         # Estimate initial profile parameters from observed peak widths.
         # This path is used when no user instprm and no usable seeds —
@@ -2550,7 +2530,8 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                                        polariz=polariz, sh_l=sh_l,
                                        u=est_u, v=est_v, w=est_w,
                                        x=est_x, y=est_y,
-                                       zero_seed=profile.get('zero_seed', 0.0))
+                                       zero_seed=profile.get('zero_seed', 0.0),
+                                       kalpha2=_use_doublet)
     # Save initial profile estimates for use as reset targets if
     # parameters diverge during refinement.  Better than resetting
     # to arbitrary small constants (e.g. 0.01) which are far from
@@ -2638,14 +2619,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         # GSAS-II selects position equations from the histogram geometry.
         # DisplaceX/Y are ignored in Bragg-Brentano mode; sample height is
         # named Shift there. Clear inactive flags before opening one handle.
-        _sample_params = histogram.data['Sample Parameters']
-        _sample_params['Type'] = ('Bragg-Brentano'
-                                  if geometry == 'bragg_brentano'
-                                  else 'Debye-Scherrer')
-        for _position_key in ('Shift', 'DisplaceX', 'DisplaceY'):
-            _position_entry = _sample_params.get(_position_key)
-            if isinstance(_position_entry, list) and len(_position_entry) >= 2:
-                _position_entry[1] = False
+        configure_histogram_geometry(histogram, geometry)
 
         # Set data range
         histogram.data['Limits'] = [[tt_min, tt_max], [tt_min, tt_max]]

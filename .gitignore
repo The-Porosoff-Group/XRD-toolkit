@@ -16,6 +16,7 @@ config.yaml
 .env.*
 !.env.example
 xrd_refinement_presets.json
+/local_instruments/
 
 # Measured data, fitting projects, and generated output
 uploads/
@@ -45,7 +46,8 @@ cifs/
 *.txt
 !requirements*.txt
 !fixtures/**
-# These two instrument reference profiles are intentional bundled inputs.
+# These instrument reference profiles are intentional bundled inputs.
+!/benchtop_Cu_Si640g.instprm
 !/smartlab_Si640g.instprm
 !/synergy_s_Si640g.instprm
 *_xrd_refinement*.png

@@ -842,6 +842,21 @@ def run(filepath, output_dir, metadata, params):
     else:
         _instrument_reason = 'specified by params'
 
+    # A measured profile owns its wavelength as well as its line-shape terms.
+    if method == 'gsas2':
+        from .instrument_profiles import get_instrument_profile, instrument_file, parse_instprm, validate_profile_range
+        selected_profile = get_instrument_profile(_instrument)
+        measured_file = params.get('instprm_file') or instrument_file(selected_profile)
+        if measured_file:
+            if not os.path.isfile(measured_file):
+                raise ValueError('The selected instrument file is missing. Upload it again or select a generic profile.')
+            with open(measured_file, 'rb') as profile_input:
+                values = parse_instprm(profile_input.read())
+            validate_profile_range(values, tt_min, tt_max)
+            wavelength = values.get('Lam', values.get('Lam1'))
+            params['instprm_file'] = measured_file
+            params['wavelength_label'] = f'λ={wavelength:.6f} Å (instrument file)'
+
     # Run refinement
     fit_settings['effective_parameters'] = {
         'method': method, 'wavelength': wavelength, 'tt_min': tt_min,
@@ -963,7 +978,7 @@ def run(filepath, output_dir, metadata, params):
 
         # Build options dict from params — callers can pass these
         # through the params dict or leave them unset for defaults.
-        _gsas_options = {}
+        _gsas_options = {'spectrum': params.get('spectrum', 'auto')}
         for _opt_key in ('geometry', 'preferred_orientation', 'refine_xyz',
                          'background_mode', 'exclude_regions',
                          'phase_sensitivity', 'verification_mode',

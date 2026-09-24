@@ -1,0 +1,19 @@
+# Benchtop Cu, flat plate; NIST Si 640g calibration, 2026-09-24
+# Validated range: 20-90 degrees 2theta; Cu Kalpha1/Kalpha2 ratio 0.5
+# Rwp 8.502%; make/model not recorded; same instrument/optics only
+# See docs/benchtop_calibration.md for settings and limitations
+#GSAS-II instrument parameter file; do not add/delete items!
+Type:PXC
+Lam1:1.540593
+Lam2:1.544414
+I(L2)/I(L1):0.5000
+Zero:-0.04099
+Polariz.:0.5
+U:0.0000
+V:0.0000
+W:4.6106
+X:2.1253
+Y:6.8818
+Z:0.0
+SH/L:0.06399
+Azimuth:0.0
