@@ -1,6 +1,6 @@
 # XRD Fitting Toolkit
 
-**Release 1.2.1** — simpler instrument selection and calibration controls.
+**Release 1.2.2** — readable XRD fit recipes in the exported workbook.
 
 Standalone XRD fitting interface from the Catalysis Data Toolkit.
 
@@ -104,9 +104,9 @@ interface no longer asks for a local instrument name or saves named profiles.
   the normalized weight percentage
 - Legend position selector, including automatic and outside-right placement;
   finished figures can be updated without refitting
-- **Fit Parameters** workbook tab with input scans/uncertainties, fit settings,
-  initial/final native GSAS-II parameters and flags, refinement stages,
-  CIF/instrument inputs, and software versions; companion `.gpx` project download
+- Readable **Fit Parameters** workbook tab with original phase-card and file
+  identities, GUI settings, and software versions; companion `.gpx` project
+  download for the detailed fitted model
 - Per-phase controls for:
   - unit-cell refinement
   - crystallite size
@@ -129,10 +129,14 @@ Install Arial on the computer generating the figures; the font is not bundled.
 If unavailable, exports warn and use Liberation Sans, then DejaVu Sans. Existing
 PNGs keep their original typography until regenerated.
 
-The **Fit Parameters** tab stores values as JSON text to retain their precision.
-Join numbered parts before decoding a long value. Open the companion `.gpx`
-project in GSAS-II to inspect the fitted model; use matching software versions
-to reproduce a fit. Older workbooks require a new fit to capture the native state.
+The **Fit Parameters** tab is a recipe for setting up the fit again in the GUI.
+It records the original phase-card identities and CIF sources or filenames,
+instrument and instrument-file identities, scan range, background settings,
+every checkbox and entered value, and software versions. Use those settings
+with matching data, CIF and instrument files, and software versions when
+repeating a fit. Open the companion `.gpx` project in GSAS-II for the detailed
+native parameters and saved fitted model. Older workbooks need a new fit to
+generate the readable recipe.
 Batch runs also accept `--legend-location "outside right"`.
 
 ## Recommended Workflow

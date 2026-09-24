@@ -1235,6 +1235,27 @@ def process_xrd():
         notes      = form.get('notes', '')
         wl_label   = form.get('wavelength_label', f'λ={wavelength:.5f} Å')
 
+        # This snapshot is export metadata only; refinement continues to use
+        # the validated fields below. Preserve inactive entries and raw axes.
+        try:
+            interface_settings = json.loads(form.get('interface_settings', '{}'))
+            if not isinstance(interface_settings, dict):
+                raise ValueError()
+            if not isinstance(interface_settings.get('controls', {}), dict):
+                raise ValueError()
+            phase_controls = interface_settings.get('phase_options', [])
+            if not isinstance(phase_controls, list) or any(
+                    not isinstance(item, dict) for item in phase_controls):
+                raise ValueError()
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid refinement interface settings.'}), 400
+        interface_settings.setdefault('controls', {
+            'instrument': form.get('instrument', 'generic_flat_plate'),
+            'wavelength_source': form.get('wavelength_source', ''),
+            'wavelength': wavelength,
+        })
+        interface_settings.setdefault('wavelength_label', wl_label)
+
         phases = json.loads(form.get('phases', '[]'))
         calibration_mode = (form.get('instrument') == 'none' or
                             form.get('calibration_mode', '').lower() == 'true')
@@ -1534,8 +1555,11 @@ def process_xrd():
                 'size_reporting_mode': size_reporting['mode'],
                 'scherrer_k': size_reporting['scherrer_k'],
                 'instprm_file':     instprm_file_path,
+                'instprm_original_filename': (
+                    instprm_f.filename if instprm_file_path and instprm_f else None),
                 'instrument':       instrument,
                 'spectrum':         spectrum,
+                'interface_settings': interface_settings,
                 # Verification mode (GSAS-II only): skip cell/Uiso/size
                 # stages and refine only bg + scales + displacement + Y.
                 # Use for first-pass tests when peak positions or widths
