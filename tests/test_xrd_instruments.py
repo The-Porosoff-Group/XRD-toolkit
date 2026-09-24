@@ -66,7 +66,7 @@ class InstrumentTests(unittest.TestCase):
         self.assertEqual(profiles.INSTRUMENT_PROFILES['smartlab'], original)
 
     def test_reject_invalid_files_before_writing(self):
-        invalid = ['', PROFILE.replace('PXC', 'PNT'), PROFILE.replace('U:2', 'U:nan'),
+        invalid = ['', '# extra comment\n' + PROFILE, PROFILE.replace('PXC', 'PNT'), PROFILE.replace('U:2', 'U:nan'),
                    PROFILE.replace('Lam:1.540593', 'Lam:0'), PROFILE + 'U:1\n',
                    PROFILE.replace('SH/L:0.002', ''), PROFILE.replace('X:0', 'X:-1'),
                    PROFILE.replace('Polariz.:0.5', 'Polariz.:2')]
@@ -197,6 +197,16 @@ class InstrumentRouteTests(InstrumentTests):
 
 @unittest.skipUnless(backend.is_available(), 'GSAS-II is not installed')
 class CalibrationIntegrationTests(unittest.TestCase):
+    def test_bundled_profile_imports_through_native_gsas_reader(self):
+        with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(io.StringIO()):
+            instrument = profiles.instrument_file(profiles.get_instrument_profile('benchtop_cu'))
+            expected = profiles.parse_instprm(Path(instrument).read_bytes())
+            project = backend.G2sc.G2Project(newgpx=str(Path(directory) / 'bundled.gpx'))
+            histogram = project.add_simulated_powder_histogram('standard', instrument, 20, 90, Tstep=0.02)
+            actual = histogram.data['Instrument Parameters'][0]
+            for key in ('Lam1', 'Lam2', 'I(L2)/I(L1)', 'U', 'V', 'W', 'X', 'Y', 'Zero', 'SH/L'):
+                self.assertAlmostEqual(actual[key][1], expected[key])
+
     def test_single_wavelength_capillary_calibration_has_no_default_sample_strain(self):
         self._assert_synthetic_calibration('capillary', False)
 
