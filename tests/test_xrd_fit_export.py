@@ -69,6 +69,10 @@ class FitParameterExportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             scan = Path(tmp) / 'scan.xye'
             scan.write_text('20 100 2\n30 200 3\n60 100 2\n')
+            profile = Path(tmp) / 'test.instprm'
+            profile.write_text('Type:PXC\nLam:1.54056\nZero:0\nU:2\nV:-2\n'
+                               'W:5\nX:0\nY:0\nSH/L:0.002\n')
+            params['instprm_file'] = str(profile)
             with patch('modules.xrd.validate_phases', return_value=[phase]), \
                  patch('modules.xrd.gsasii_backend.is_available', return_value=True), \
                  patch('modules.xrd.gsasii_backend.run_gsas2', return_value=result), \
