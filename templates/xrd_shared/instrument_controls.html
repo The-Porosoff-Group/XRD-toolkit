@@ -1,51 +1,9 @@
-<div class="form-group" id="instprm-group">
-  <label for="xrd-instrument">Instrument / calibration profile</label>
+<div class="form-group" id="instprm-group" style="min-width:240px;flex:1;max-width:360px;">
+  <label for="xrd-instrument">Instrument</label>
   <select id="xrd-instrument" onchange="xrdInstrumentChanged()">
-    <option value="generic_flat_plate">Default / generic flat plate (Bragg-Brentano)</option>
-    <option value="generic_capillary">Generic capillary / transmission</option>
-    <option value="benchtop_cu">Benchtop Cu — flat plate (Si 640g)</option>
-    <option value="upload">Upload .instprm…</option>
-    <option value="auto">Auto-detect from scan name</option>
     <option value="smartlab">Rigaku SmartLab (BB)</option>
     <option value="synergy_s">Synergy-S (capillary)</option>
+    <option value="benchtop_cu">Benchtop Cu — flat plate (Si 640g)</option>
+    <option value="none" selected>None / calibration</option>
   </select>
-  <span id="xrd-instrument-description" style="font-size:12px;color:var(--muted);">Generic starting parameters; no measured instrument profile.</span>
-  <div id="xrd-upload-profile" style="display:none;margin-top:8px;">
-    <label for="xrd-upload-geometry">Geometry for this file</label>
-    <select id="xrd-upload-geometry">
-      <option value="bragg_brentano">Flat plate / Bragg-Brentano</option>
-      <option value="capillary">Capillary / transmission</option>
-    </select>
-    <label for="xrd-instprm-file" style="margin-top:8px;">GSAS-II instrument file (.instprm)</label>
-    <input type="file" id="xrd-instprm-file" accept=".instprm" style="font-size:12px;">
-    <span style="font-size:11px;color:var(--muted);">Use for this fit, or save below to add it to your local dropdown. The file supplies the wavelength and peak profile; choose its measurement geometry here.</span>
-  </div>
-  <label for="xrd-local-instrument-name" style="margin-top:8px;">Local instrument name</label>
-  <input id="xrd-local-instrument-name" maxlength="100" placeholder="e.g. Benchtop Cu — flat plate — Si 640g">
-  <button type="button" id="xrd-save-upload" class="btn-sm" style="display:none;margin-top:6px;" onclick="saveXrdLocalInstrument(false)">Save uploaded file locally</button>
-  <span id="xrd-instrument-status" role="status" style="font-size:12px;color:var(--muted);"></span>
-</div>
-<div class="form-group">
-  <label for="xrd-spectrum">Radiation spectrum for a new profile</label>
-  <select id="xrd-spectrum">
-    <option value="auto">Automatic: Cu Kα1/Kα2; other sources single wavelength</option>
-    <option value="cu_doublet">Cu Kα1 + Kα2 (ratio 0.5)</option>
-    <option value="single">Single wavelength / Kα1 only</option>
-  </select>
-  <span style="font-size:11px;color:var(--muted);">Select single wavelength for monochromated or Kα2-stripped data. A loaded .instprm supplies its own spectrum during sample fitting.</span>
-</div>
-<div class="form-group">
-  <label id="cal-mode-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-    <input type="checkbox" id="xrd-calibration-mode" style="width:auto;" onchange="xrdCalibrationChanged()">
-    Calibrate instrument using NIST Si 640g
-  </label>
-  <div id="xrd-calibration-help" style="display:none;font-size:12px;color:var(--muted);line-height:1.5;">
-    Upload your Si 640g scan, choose its geometry and spectrum, then run GSAS-II Refinement.
-    The certified Si structure is built in; phase search is not needed and selected sample phases are ignored.
-    Cell and sample broadening stay fixed while instrument terms are fitted.
-    Review the fit and report before saving the candidate as a local instrument.
-    <label for="xrd-calibration-polariz" style="margin-top:6px;">Beam polarization (0–1, according to optics)</label>
-    <input id="xrd-calibration-polariz" type="number" min="0" max="1" step="0.01" value="0.5">
-    <span>0.5 is an unpolarized starting value. Calibration starts fresh and does not reuse an uploaded profile.</span>
-  </div>
 </div>

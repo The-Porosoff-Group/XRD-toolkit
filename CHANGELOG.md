@@ -1,5 +1,20 @@
 # Release notes
 
+## 1.2.1 — 2026-09-24
+
+- Restore the instrument selector beside Run Refinement with three shared
+  instruments and **None / calibration**.
+- Start Si 640g calibration from fresh parameters by selecting None; show only
+  its geometry control, with the Cu doublet chosen automatically for Cu data.
+- Remove local profile naming, radiation-spectrum selection, and the separate
+  calibration checkbox from setup. Calibration results retain file downloads.
+- Keep optional `.instprm` overrides in collapsed GSAS controls for sample fits;
+  existing local profile files and APIs remain available.
+- Move legend placement into the results' Plot settings and simplify Scan
+  Settings in both the main toolkit and standalone XRD interface.
+
+- Show elapsed fitting time instead of cycling through simulated progress stages.
+
 ## 1.2.0 — 2026-09-24
 
 - Bundle the benchtop Cu flat-plate Si 640g calibration and show it in the

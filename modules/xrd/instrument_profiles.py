@@ -14,6 +14,7 @@ import warnings
 TOOLKIT_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_INSTRUMENT_DIR = TOOLKIT_ROOT / 'local_instruments'
 DEFAULT_INSTRUMENT = 'generic_flat_plate'
+PRIMARY_INSTRUMENT_IDS = ('smartlab', 'synergy_s', 'benchtop_cu', 'none')
 
 
 def geometry_profile(geometry):
@@ -30,6 +31,10 @@ def geometry_profile(geometry):
 
 
 INSTRUMENT_PROFILES = {
+    'none': dict(geometry_profile('bragg_brentano'),
+        label='None / calibration', calibration=True,
+        notes='Calibrate a Si 640g standard from fresh Cu Kα starting parameters. '
+              'No saved instrument calibration is loaded.'),
     'generic_flat_plate': dict(geometry_profile('bragg_brentano'),
         label='Default / generic flat plate (Bragg-Brentano)'),
     'generic_capillary': dict(geometry_profile('capillary'),
@@ -55,6 +60,15 @@ INSTRUMENT_PROFILES = {
         instprm_filename='synergy_s_Si640g.instprm',
         notes='Bundled Synergy-S profile; use only with its matching configuration.'),
 }
+
+
+def get_primary_instrument_profiles():
+    """The three shared instruments and the fresh-calibration choice.
+
+    Keep older geometry keys and local profiles available to stored settings and
+    API clients without adding them to the main instrument selector.
+    """
+    return {key: dict(INSTRUMENT_PROFILES[key]) for key in PRIMARY_INSTRUMENT_IDS}
 
 
 def parse_instprm(content):
@@ -148,7 +162,7 @@ def get_instrument_profile(key=None):
         key = DEFAULT_INSTRUMENT
     profiles = get_instrument_profiles()
     if key not in profiles:
-        raise ValueError('Instrument profile is unavailable. Select a generic geometry or upload its .instprm again.')
+        raise ValueError('Instrument profile is unavailable. Select one of the available instruments or None / calibration.')
     return profiles[key]
 
 

@@ -1,0 +1,14 @@
+<div id="xrd-calibration-help" style="display:none;font-size:12px;color:var(--muted);line-height:1.5;">
+  Upload a NIST Si 640g standard, then click <b>Run calibration</b>. No instrument file is loaded;
+  the certified Si structure is included, so phase search is not needed.
+  <div class="form-group" style="max-width:320px;margin-top:8px;">
+    <label for="xrd-calibration-geometry">Standard measurement geometry</label>
+    <select id="xrd-calibration-geometry">
+      <option value="bragg_brentano">Flat plate / Bragg-Brentano</option>
+      <option value="capillary">Capillary / transmission</option>
+    </select>
+  </div>
+  Uses the X-ray source above (ordinary Cu Kα1/Kα2 for Cu). Review the fitted standard
+  and download the .instprm from the results.
+</div>
+<span id="xrd-instrument-status" role="status" style="font-size:12px;color:var(--muted);"></span>

@@ -36,7 +36,6 @@ vm.runInContext(fs.readFileSync(path.join(root, 'templates/xrd_shared/legend_set
   assert.equal(request.body.plot_token, 'cached-fit');
   assert.equal(request.body.legend_location, 'outside right');
   assert.equal(element('xrd-result-legend-location').value, 'outside right');
-  assert.equal(element('xrd-legend-location').value, 'outside right');
   assert.match(element('xrd-legend-status').textContent, /both PNG exports/);
   assert.equal(rendered.statistics.Rwp, 2);
   assert.equal(element('xrd-result-legend-location').disabled, false);
@@ -44,12 +43,14 @@ vm.runInContext(fs.readFileSync(path.join(root, 'templates/xrd_shared/legend_set
   context.fetch = async () => ({ok:false, json:async () => ({error:'Fit expired'})});
   await context.updateXrdLegendSelection({value:'lower left'});
   assert.match(element('xrd-legend-status').textContent, /PNG exports not updated: Fit expired/);
-  assert.equal(element('xrd-legend-location').disabled, false);
+  assert.equal(element('xrd-result-legend-location').disabled, false);
 
   for (const file of ['templates/index.html', 'templates/xrd_toolkit/index.html']) {
     if (!fs.existsSync(path.join(root, file))) continue;
     const html = fs.readFileSync(path.join(root, file), 'utf8');
     assert.match(html, /id="xrd-result-legend-location"/);
+    assert.doesNotMatch(html, /id="xrd-legend-location"/);
+    assert.match(html, /<details id="xrd-plot-settings"/);
     assert.match(html, /fd.append\('legend_location'/);
     assert.match(html, /xrd_shared\/legend_settings.js/);
     assert.match(html, /GSAS-II Project \(GPX\)/);

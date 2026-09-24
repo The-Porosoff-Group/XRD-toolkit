@@ -1236,7 +1236,8 @@ def process_xrd():
         wl_label   = form.get('wavelength_label', f'λ={wavelength:.5f} Å')
 
         phases = json.loads(form.get('phases', '[]'))
-        calibration_mode = form.get('calibration_mode', '').lower() == 'true'
+        calibration_mode = (form.get('instrument') == 'none' or
+                            form.get('calibration_mode', '').lower() == 'true')
         if calibration_mode and form.get('method') == 'gsas2':
             from modules.xrd.instrument_profiles import silicon_640g_phase
             if form.get('calibration_standard', 'Si640g') != 'Si640g':
@@ -1270,6 +1271,11 @@ def process_xrd():
 
         from modules.xrd.instrument_profiles import get_instrument_profile, parse_instprm
         instrument = form.get('instrument', 'generic_flat_plate').strip() or 'generic_flat_plate'
+        if instrument == 'none':
+            geometry = form.get('instrument_geometry', 'bragg_brentano')
+            if geometry not in ('bragg_brentano', 'capillary'):
+                return jsonify({'error': 'Choose flat plate or capillary calibration geometry.'}), 400
+            instrument = 'generic_capillary' if geometry == 'capillary' else 'none'
         if instrument == 'upload':
             instrument = ('generic_capillary' if form.get('instrument_geometry') == 'capillary'
                           else 'generic_flat_plate')
@@ -1310,7 +1316,8 @@ def process_xrd():
             plot_theme = 'light'
 
         # ── Calibration mode: separate backend ──────────────────────────
-        calibration_mode = form.get('calibration_mode', '').lower() == 'true'
+        calibration_mode = (form.get('instrument') == 'none' or
+                            form.get('calibration_mode', '').lower() == 'true')
 
         if calibration_mode and form.get('method', '') == 'gsas2':
             from modules.xrd.gsasii_calibration import run_calibration

@@ -1,6 +1,6 @@
 # XRD Fitting Toolkit
 
-**Release 1.2.0** — shared benchtop calibration and local instrument profiles.
+**Release 1.2.1** — simpler instrument selection and calibration controls.
 
 Standalone XRD fitting interface from the Catalysis Data Toolkit.
 
@@ -30,13 +30,14 @@ This version opens directly into the XRD workflow and hides unfinished modules. 
 
 The first launch creates a local Python environment and installs dependencies. GSAS-II installation can take several minutes.
 
-## Instrument calibration and local profiles
+## Instruments and calibration
 
-**Instrument Settings → Instrument / calibration profile** now offers generic
-flat-plate (Bragg–Brentano) and capillary/transmission starting profiles, named
-bundled profiles, and **Upload .instprm…**. Generic profiles do not load another
-instrument's measured calibration. Unidentified scans default to the generic
-flat-plate geometry; verify the geometry before fitting.
+The **Instrument** selector beside **Run Refinement** has four choices:
+**Rigaku SmartLab (BB)**, **Synergy-S (capillary)**,
+**Benchtop Cu — flat plate (Si 640g)**, and **None / calibration**.
+Choose the instrument used for a sample scan. Each named instrument loads its
+bundled calibration and geometry. Scan range, source, and other scan inputs
+remain in **Scan Settings**.
 
 The **Benchtop Cu — flat plate (Si 640g)** entry loads the bundled
 `benchtop_Cu_Si640g.instprm` automatically. It is included in Git for other users
@@ -48,21 +49,21 @@ for other benchtop machines.
 To calibrate from **NIST Si 640g**:
 
 1. Upload the standard measured with the same optics and configuration as your
-   samples. Select its geometry and an angular range with several Si peaks.
-2. Set the radiation spectrum: Cu Kα1/Kα2 for a normal Cu doublet, or **Single
-   wavelength / Kα1 only** for monochromated or Kα2-stripped data. Check beam
-   polarization against the optics. Auto spectrum uses a Cu doublet near 1.54 Å
-   and a single wavelength for other sources.
-3. Tick **Calibrate instrument using NIST Si 640g** and run **GSAS-II Refinement**.
-   The certified Si cell (`a = 5.431109 Å`) is built in; no database/API key or
-   selected sample phase is required. Selected sample phases are ignored.
+   samples. Set an angular range with several Si peaks.
+2. Select **None / calibration** beside **Run Refinement**, then choose the
+   standard's geometry. Flat plate is the initial choice. No saved `.instprm`
+   or optional file override is used in calibration.
+3. Click **Run calibration**. Ordinary Cu data use a Cu Kα1/Kα2 doublet
+   automatically. The certified Si cell (`a = 5.431109 Å`) is built in; no
+   database/API key or selected sample phase is required. Selected sample
+   phases are ignored.
 4. Inspect the fit and warnings, then download the candidate `.instprm`, report,
    and GSAS-II project. Parameter checks cover the fitted angular range; they
    are not a fit-quality certification. Chi-square requires valid uncertainties,
    which cannot be inferred from counts-per-second data without counting times.
-5. Enter a descriptive name and click **Save as local instrument**. The saved
-   profile appears immediately in the dropdown and calibration mode turns off.
-   Test it with a repeat standard scan before relying on sample broadening.
+5. Keep the downloaded file locally and test it with a repeat standard scan
+   before relying on sample broadening. Select a named instrument again to
+   return to sample fitting.
 
 The calibrator explicitly applies the selected geometry. It starts from fresh
 profile values, fixes the certified cell and sample broadening, initializes the
@@ -73,19 +74,18 @@ ratio is fixed at 0.5. A mounting-dependent position error can still affect Zero
 check peak positions and repeatability. Instrument/optics-specific asymmetry and
 absorption can require further work in GSAS-II.
 
-To reuse an existing calibration, select **Upload .instprm…**, choose its
-geometry, select a single-bank GSAS-II `Type:PXC` file, and either fit directly
-or enter a name and click **Save uploaded file locally**. The file supplies the
-wavelength and spectrum during sample fitting. Legacy `.prm`/`.inst`, TOF, and
-multi-bank files must first be converted/exported as a supported `.instprm`.
-Other calibration standards can be fitted externally and imported this way.
+To use another `.instprm` for a sample fit, select a named instrument with the
+matching geometry, expand **GSAS controls**, and choose the optional instrument
+file override. The single-bank GSAS-II `Type:PXC` file supplies the wavelength
+and peak profile; the selected instrument supplies the geometry. Clear the
+override to use the bundled file again. Legacy `.prm`/`.inst`, TOF, and multi-bank
+files must first be converted/exported as a supported `.instprm`. Other
+calibration standards can be fitted externally and imported this way.
 
-Local profiles and geometry metadata are stored in the git-ignored
-`local_instruments/` folder. They survive restarts, remain on that computer, and
-are not bundled in software updates. Each save creates a new profile; existing
-files are not overwritten. Calibration candidates and reports are kept together
-in that run's results folder. A failed candidate can be downloaded for diagnosis
-but cannot be saved from the calibration result as a local instrument.
+Calibration candidates and reports remain together in the run's results folder.
+Previously saved files in `local_instruments/` and the local-profile API are
+preserved, but saved profiles do not add entries to the main dropdown. The
+interface no longer asks for a local instrument name or saves named profiles.
 
 ## Main Features
 
