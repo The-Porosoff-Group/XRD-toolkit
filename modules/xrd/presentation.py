@@ -83,9 +83,9 @@ def phase_legend_label(phase, index=None, *, show_weight=True):
     weight = phase.get("weight_fraction_%")
     uncertainty = phase.get("weight_fraction_err_%")
     if show_weight and weight not in (None, ""):
-        value = f"{weight}"
+        value = f"{float(weight):.1f}"
         if uncertainty not in (None, ""):
-            value += f" ± {uncertainty}"
+            value += f" ± {float(uncertainty):.1f}"
         label += f", {value} wt. %"
     return label
 

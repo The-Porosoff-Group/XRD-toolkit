@@ -994,7 +994,7 @@
               <input type="checkbox" id="xrd-verify-cell" style="margin-right:4px;">
               Refine cell too
             </label>
-            <label id="phase-iso-label" style="display:none;margin-left:6px;font-size:12px;color:var(--muted);cursor:pointer;" title="Phase isolation (default ON): per-phase curves and ticks come from GSAS-II's actual calculated pattern and RefList. When OFF, per-phase curves are reconstructed manually from the Python reflection list — guaranteed visual consistency but does not reflect GSAS-II's internal Fc².">
+            <label id="phase-iso-label" style="display:none;margin-left:6px;font-size:12px;color:var(--muted);cursor:pointer;" title="Phase isolation (default ON): calculate each phase separately after fitting. When OFF, draw phase curves from the saved fitted reflection profiles, including size and strain broadening. Both modes preserve the overall fit; ticks use fitted reflection positions.">
               <input type="checkbox" id="xrd-phase-isolation" style="margin-right:4px;" checked>
               Phase isolation
             </label>
@@ -3097,7 +3097,7 @@ async function runXRD(method) {
     if (verifyCellCheckbox && verifyCellCheckbox.checked) {
       fd.append('verify_refine_cell', 'true');
     }
-    // Phase isolation — per-phase curves from GSAS-II ycalc instead of manual reconstruction
+    // Phase isolation — separate evaluations instead of saved native profiles
     const phaseIsoCheckbox = document.getElementById('xrd-phase-isolation');
     if (phaseIsoCheckbox && phaseIsoCheckbox.checked) {
       fd.append('phase_isolation', 'true');
@@ -3618,10 +3618,10 @@ function renderXrdPublicationPlot(data) {
       const color = phasePalette[i % phasePalette.length];
       const phaseTop = (pd.y_background || []).map(
         (value, j) => Number(value) + Math.max(Number(component[j] || 0), 0));
-      const weight = phase['weight_fraction_%'];
-      const uncertainty = phase['weight_fraction_err_%'];
+      const weight = _fitNum(phase['weight_fraction_%']);
+      const uncertainty = _fitNum(phase['weight_fraction_err_%']);
       const weightText = phases.length <= 1 || weight == null ? '' :
-        `, ${weight}${uncertainty == null ? '' : ` ± ${uncertainty}`} wt. %`;
+        `, ${weight.toFixed(1)}${uncertainty == null ? '' : ` ± ${uncertainty.toFixed(1)}`} wt. %`;
       const phaseLabel = phase.tick_label || phase.display_label || String(
         phase.formula || phase.name || 'Fitted phase').replace(/[_-]+/g, ' ');
       traces.push({
@@ -3630,7 +3630,7 @@ function renderXrdPublicationPlot(data) {
       });
       traces.push({
         x:pd.tt, y:phaseTop,
-        name:phases.length === 1 ? phaseLabel : (phase.legend_label || `${phaseLabel}${weightText}`),
+        name:phases.length === 1 ? phaseLabel : `${phaseLabel}${weightText}`,
         type:'scatter', mode:'lines', line:{color:color,width:1.5},
         fill:'tonexty', fillcolor:colorWithAlpha(color, 0.42),
         hovertemplate:`2θ: %{x:.3f}°<br>${phaseLabel} contribution: %{y:.4g}<extra></extra>`,
