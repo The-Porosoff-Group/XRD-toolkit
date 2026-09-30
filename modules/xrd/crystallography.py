@@ -617,10 +617,19 @@ def _species_occ_pairs(site):
 
 
 def _display_hkl(h, k, l, system):
-    """Canonical representative HKL for UI labels."""
-    hkl = (abs(h), abs(k), abs(l))
+    """Choose a display representative without erasing relative index signs.
+
+    Outside the existing cubic convention, use only whole-triplet Friedel
+    inversion. Independent sign changes need more symmetry information than
+    the crystal system alone supplies and can change the plane's d-spacing
+    (for example, monoclinic 111 and 11-1).
+    """
+    hkl = (h, k, l)
     if (system or '').lower() == 'cubic':
-        return tuple(sorted(hkl, reverse=True))
+        return tuple(sorted(map(abs, hkl), reverse=True))
+    for index in hkl:
+        if index:
+            return tuple(-value for value in hkl) if index < 0 else hkl
     return hkl
 
 

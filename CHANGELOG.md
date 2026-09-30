@@ -1,5 +1,21 @@
 # Release notes
 
+## 1.2.4 — 2026-09-30
+
+- Fix striped or missing phase contributions when Phase isolation is unchecked.
+  Reconstruct constant-wavelength components from saved native GSAS-II profiles,
+  retaining fitted size/strain broadening, asymmetry, intensities, and doublets.
+  Validate their sum against the native calculated pattern; unavailable
+  components are reported rather than replaced with invented partitions.
+- Use fitted reflection positions for result ticks and retain signed Miller
+  indices for non-cubic phases. The tick intensity threshold affects display
+  only; it does not remove reflections from refinement.
+- Show phase weight percentages and their uncertainties to one decimal place
+  in interactive and exported figure legends, preserving underlying precision.
+- These display corrections do not change fitted parameters, weight fractions,
+  or fit statistics. Existing saved figures must be regenerated.
+
+
 ## 1.2.3 — 2026-09-30
 
 - Remove the automatic fivefold uncertainty adjustment from Synergy-S. All

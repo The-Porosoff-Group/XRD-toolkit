@@ -29,7 +29,7 @@ SEPARATION RULE (refinement vs. display):
   Catalysis-Toolkit_Architecture_v1.md.
 """
 
-import math, os, re, sys, tempfile, warnings
+import copy, math, os, re, sys, tempfile, warnings
 import numpy as np
 
 try:
@@ -1164,9 +1164,134 @@ def _nnls(A, b):
 # PER-PHASE PATTERN FROM GSAS-II REFLECTIONS
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _compute_gsas_cw_phase_profiles(tt_arr, reflection_lists, inst_params,
+                                   phase_names):
+    """Evaluate saved native CW reflections without rerunning a refinement.
+
+    RefList sig/gam include each phase's size and strain broadening. Icorr
+    includes scales, multiplicity and intensity corrections. Display ticks
+    must never replace or intensity-filter this list. Returns absolute phase
+    contributions in the same units as GSAS-II ycalc-yb, without mutation.
+    """
+    x = np.asarray(tt_arr, dtype=np.float64)
+    if (x.ndim != 1 or len(x) < 2 or not np.all(np.isfinite(x))
+            or np.any(np.diff(x) <= 0)):
+        raise ValueError('Native phase profiles need an increasing angle grid')
+
+    def parameter(name):
+        value = inst_params[name]
+        # Native instrument records store original/current/refine at 0/1/2.
+        return value[1] if isinstance(value, (list, tuple, np.ndarray)) else value
+
+    hist_type = str(parameter('Type'))
+    if len(hist_type) < 3 or hist_type[2] != 'C':
+        raise ValueError('Native reflection reconstruction requires CW C profiles')
+    shl = max(float(parameter('SH/L')), 0.002)
+    if not math.isfinite(shl):
+        raise ValueError('Invalid native axial-divergence parameter')
+    doublet = 'Lam1' in inst_params
+    lam_ratio, ka_ratio = 0.0, 0.0
+    if doublet:
+        lam1, lam2 = float(parameter('Lam1')), float(parameter('Lam2'))
+        ka_ratio = float(parameter('I(L2)/I(L1)'))
+        if (not all(math.isfinite(v) for v in (lam1, lam2, ka_ratio))
+                or min(lam1, lam2) <= 0 or ka_ratio < 0):
+            raise ValueError('Invalid native wavelength doublet')
+        lam_ratio = 360.0 * (lam2-lam1) / (math.pi*lam1)
+
+    def add_peak(pattern, position, sig, gam, amplitude):
+        _, low, high = G2pwd.getWidthsCW(position, sig, gam, shl)
+        start = int(np.searchsorted(x, position-low))
+        stop = int(np.searchsorted(x, position+high))
+        if stop <= start or amplitude == 0:
+            return
+        # getFCJVoigt3's diagnostic integral needs at least two points.
+        # Extend a one-point window for evaluation, not for accumulation.
+        eval_start, eval_stop = start, stop
+        if stop-start == 1:
+            if stop < len(x):
+                eval_stop += 1
+            else:
+                eval_start -= 1
+        profile = np.asarray(G2pwd.getFCJVoigt3(
+            position, sig, gam, shl, x[eval_start:eval_stop])[0])
+        pattern[start:stop] += amplitude * profile[
+            start-eval_start:stop-eval_start]
+
+    patterns = []
+    for name in phase_names:
+        if name not in reflection_lists:
+            raise ValueError(f'Missing native reflections for phase {name}')
+        record = reflection_lists[name]
+        if 'RefList' not in record:
+            raise ValueError(f'Missing native RefList for phase {name}')
+        refs = np.asarray(record['RefList'], dtype=np.float64)
+        offset = int(bool(record.get('Super', False)))
+        pattern = np.zeros_like(x)
+        if refs.size == 0:
+            patterns.append(pattern)
+            continue
+        if refs.ndim != 2 or refs.shape[1] < 12+offset:
+            raise ValueError(f'Incomplete native reflections for phase {name}')
+        for row in refs:
+            pos, sig, gam, fc2, icorr = row[
+                np.array([5, 6, 7, 9, 11])+offset]
+            if not np.all(np.isfinite([pos, sig, gam, fc2, icorr])):
+                raise ValueError(f'Nonfinite native reflection for phase {name}')
+            amplitude = fc2*icorr
+            if amplitude == 0:
+                continue
+            if sig < 0 or gam < 0 or amplitude < 0:
+                raise ValueError(f'Nonphysical native reflection for phase {name}')
+            add_peak(pattern, pos, sig, gam, amplitude)
+            if doublet and ka_ratio:
+                pos2 = pos + lam_ratio*math.tan(math.radians(pos/2.0))
+                add_peak(pattern, pos2, sig, gam, amplitude*ka_ratio)
+        if not np.all(np.isfinite(pattern)):
+            raise ValueError(f'Nonfinite native profile for phase {name}')
+        patterns.append(pattern)
+    return patterns
+
+
+def _gsas_fitted_tick_refs(record, tt_min, tt_max, include_weak=False):
+    """Select display ticks at native, position-corrected reflection angles.
+
+    The intensity threshold affects ticks only. Keep signed indices in the
+    native cell setting, and use corrected calculated integrated intensity.
+    Invalid display records leave ticks unavailable without discarding a fit.
+    """
+    try:
+        offset = int(bool(record.get('Super', False)))
+        if 'RefList' not in record:
+            raise ValueError('Missing native reflection list')
+        refs = []
+        for row in record['RefList']:
+            if len(row) < 12+offset:
+                raise ValueError('Incomplete native reflection for fitted ticks')
+            pos, d = float(row[5+offset]), float(row[4+offset])
+            intensity = float(row[9+offset])*float(row[11+offset])
+            if (not all(math.isfinite(v) for v in (pos, d, intensity))
+                    or d <= 0 or intensity < 0):
+                raise ValueError('Invalid native reflection for fitted ticks')
+            # Modulated RefList rows have h,k,l,m; preserve the satellite
+            # index so distinct reflections do not acquire identical labels.
+            indices = tuple(int(v) for v in row[:3+offset])
+            if tt_min <= pos <= tt_max and intensity > 0:
+                refs.append((pos, d, indices, intensity))
+        if include_weak:
+            return refs
+        return filter_reflections_by_relative_intensity(refs)
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError,
+            OverflowError) as exc:
+        warnings.warn(
+            'GSAS-II fitted reflection ticks are unavailable: '
+            f'{exc}. The fitted total is unchanged.', stacklevel=2)
+        return []
+
+
 def _compute_raw_phase_profile(tt_arr, refs, U_deg, V_deg, W_deg,
                                 X_deg, Y_deg, gaussian_only=False):
-    """Compute a raw (unscaled) profile shape for one phase.
+    """Legacy instrument-only display profile; not used for fitted phases.
 
     Returns an array of the same length as *tt_arr* whose values are
     proportional to the diffracted intensity at each 2θ point.  The
@@ -2250,8 +2375,8 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
     if refine_size_opt:
         print(f"  Structural: HAP Size will refine in Stage 4b "
               f"(verify_refine_size=True).", flush=True)
-    # Tick source: default Python phase_refs (filtered by intensity),
-    # opt-in to GSAS-II RefList (all reflections including weak ones).
+    # Native fitted ticks are intensity-filtered by default; this legacy
+    # option includes weak reflections too. Neither setting affects the fit.
     use_gsas_ticks_opt  = bool(options.get('use_gsas_ref_ticks', False))
     # Fix WC PO: keep March-Dollase enabled at a held value instead of
     # refining.  Use when adding Uiso to a recipe where MD was refining
@@ -4522,6 +4647,12 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         # h,k,l,mult,d,pos,sig,gam,Fobs2,Fcalc2,phase,Icorr,Prfo.
         gsas_refs = {}   # phase_name -> [(two_theta, d, (h,k,l), mult*Fc2)]
         gsas_ref_profiles = {}
+        # Isolation temporarily changes scales and recalculates RefList.
+        # Capture the fitted profiles before any display-only work.
+        native_profile_refs = copy.deepcopy(
+            histogram.data.get('Reflection Lists', {}))
+        native_profile_inst = copy.deepcopy(
+            histogram.data['Instrument Parameters'][0])
         try:
             raw_refl_lists = histogram.data.get('Reflection Lists', {})
             for ph_name, refl_data in raw_refl_lists.items():
@@ -4822,13 +4953,14 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             except Exception:
                 pass
 
-            # Tick source: by default Python-filtered phase_refs (clean
-            # display).  When use_gsas_ref_ticks is True, switch to
-            # GSAS-II's RefList (all reflections including weak ones).
-            if use_gsas_ticks_opt and gsas_phase_refs:
-                tick_source_refs = [
-                    r for r in gsas_phase_refs if tt_min <= r[0] <= tt_max]
-                _tick_src_label = 'GSAS-II RefList'
+            # Fitted ticks must include the actual Zero/displacement shifts
+            # and retain signed HKLs. The weak-tick option changes only display
+            # filtering, never the native reflection list used for the fit.
+            if phase_obj.name in native_profile_refs:
+                tick_source_refs = _gsas_fitted_tick_refs(
+                    native_profile_refs[phase_obj.name], tt_min, tt_max,
+                    include_weak=use_gsas_ticks_opt)
+                _tick_src_label = 'GSAS-II RefList (filtered for display)'
             else:
                 tick_source_refs = filter_reflections_by_relative_intensity(
                     phase_refs)
@@ -4848,7 +4980,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                       f"reflections", flush=True)
             print(f"    Python refs:    {len(phase_refs)} reflections",
                   flush=True)
-            # Manual reconstruction fallback uses Python refs.
+            # Retain the independently calculated reference list for diagnostics.
             all_phase_refs.append(phase_refs)
 
             # B_iso (average over atoms; falls back to DEFAULT_B_ISO)
@@ -5021,10 +5153,9 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             #   internal calculation (each phase's scale set to zero
             #   except one, ycalc recomputed, contribution extracted).
             #   These are the physically meaningful per-phase curves.
-            # When OFF: per-phase patterns are reconstructed manually
-            #   from the Python reflection list and refined U/V/W/X/Y.
-            #   Display-only — guaranteed to match the tick positions
-            #   but does not reflect GSAS-II's internal Fc² values.
+            # When OFF: evaluate the fitted native RefList profiles directly,
+            #   including HAP size/strain, intensity corrections and Kalpha2.
+            #   Display tick filtering never controls the phase curves.
             #
             # Rule: if isolation succeeds, USE IT.  If it fails (count
             # mismatch, exception, etc.), fall back to manual recon.
@@ -5035,8 +5166,8 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                 print("  Phase isolation: ENABLED (per-phase curves from "
                       "GSAS-II ycalc).", flush=True)
             else:
-                print("  Phase isolation: DISABLED (manual reconstruction "
-                      "for tick/envelope consistency).", flush=True)
+                print("  Phase isolation: DISABLED (saved native reflection "
+                      "profiles).", flush=True)
 
             # Save ALL refinement flags — the main refinement left many
             # params refinable (background, U/V/W/X/Y, cell, Uiso).
@@ -5233,52 +5364,30 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             if not decomp_ok:
                 print("  Falling back to profile reconstruction...",
                       flush=True)
-                if all_phase_refs and len(all_phase_refs) == len(gsas_phases):
+                if native_profile_refs:
                     try:
-                        U_d = inst['U'] / 10000.0
-                        V_d = inst['V'] / 10000.0
-                        W_d = inst['W'] / 10000.0
-                        X_d = inst['X'] / 100.0
-                        Y_d = inst['Y'] / 100.0
-
-                        raw_profiles = []
-                        for i_ph, (phase_obj_r, fallback_refs) in enumerate(
-                                zip(gsas_phases, all_phase_refs)):
-                            # Always use all_phase_refs (same as ticks)
-                            # for consistency.  Never mix with GSAS-II
-                            # RefList which may have different reflections.
-                            refs_to_use = fallback_refs
-                            if not refs_to_use:
-                                raise ValueError(
-                                    f"No reflections for phase {i_ph}")
-                            raw_profiles.append(
-                                _compute_raw_phase_profile(
-                                    tt_out, refs_to_use,
-                                    U_d, V_d, W_d, X_d, Y_d,
-                                    gaussian_only=True))
-
-                        scaled = []
-                        for phase_obj, prof in zip(gsas_phases, raw_profiles):
-                            s = raw_scales.get(phase_obj.name)
-                            if s is None or not math.isfinite(s) or s < 0.0:
-                                raise ValueError("Invalid phase scale for reconstruction")
-                            scaled.append(prof * s)
-
-                        sum_raw = np.zeros_like(tt_out, dtype=np.float64)
-                        for sp in scaled:
-                            sum_raw += sp
-                        peak_max = (np.max(sum_raw)
-                                    if np.max(sum_raw) > 0 else 1.0)
-                        threshold = peak_max * 1e-10
+                        scaled = _compute_gsas_cw_phase_profiles(
+                            tt_out, native_profile_refs, native_profile_inst,
+                            [phase_obj.name for phase_obj in gsas_phases])
+                        sum_raw = np.sum(scaled, axis=0)
+                        expected = np.maximum(y_calc_out - _y_bg_gsas, 0.0)
+                        tolerance = max(1e-10, float(np.max(expected))*1e-8)
+                        if not np.allclose(sum_raw, expected, rtol=1e-6,
+                                           atol=tolerance):
+                            raise ValueError(
+                                'Native reflection profiles do not reproduce '
+                                'the fitted pattern; refusing to repartition it')
+                        # Match any display-only background adjustment only
+                        # after checking the absolute sum. Retain long tails.
                         for sp in scaled:
                             ratio = np.zeros_like(sum_raw)
                             np.divide(sp, sum_raw, out=ratio,
-                                      where=sum_raw > threshold)
+                                      where=sum_raw > 0)
                             phase_patterns.append(
                                 np.maximum(
                                     ratio * total_above_bg, 0.0).tolist())
                         decomp_ok = True
-                        phase_pattern_method = 'reflection_profile_reconstruction'
+                        phase_pattern_method = 'gsasii_reflection_profiles'
                         print("  Profile reconstruction succeeded.",
                               flush=True)
                     except Exception as e_fc2:
@@ -5286,20 +5395,17 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
                               flush=True)
                         phase_patterns = []
 
-            # ── Last resort: equal split ───────────────────────────────
+            # Do not fabricate component curves when reconstruction fails.
             if not decomp_ok:
                 warnings.warn(
                     "GSAS-II phase decomposition: both isolation and "
-                    "profile reconstruction failed. Falling back to "
-                    "equal split for display-area diagnostics.")
-                phase_pattern_method = 'equal_split_display_fallback'
+                    "profile reconstruction failed. Individual phase curves "
+                    "are unavailable; the fitted total is unchanged.")
+                phase_pattern_method = 'unavailable'
                 phase_patterns = []
-                for _ in gsas_phases:
-                    share = (total_above_bg / len(gsas_phases)).tolist()
-                    phase_patterns.append(share)
 
             # Hard guard: phase_patterns must match gsas_phases count
-            if len(phase_patterns) != len(gsas_phases):
+            if decomp_ok and len(phase_patterns) != len(gsas_phases):
                 print(f"  WARNING: phase pattern count mismatch: "
                       f"{len(phase_patterns)} patterns for "
                       f"{len(gsas_phases)} phases. Discarding "
