@@ -1,6 +1,6 @@
 # XRD Fitting Toolkit
 
-**Release 1.2.2** — readable XRD fit recipes in the exported workbook.
+**Release 1.2.3** — correct CSV uncertainties and native GSAS-II fit statistics.
 
 Standalone XRD fitting interface from the Catalysis Data Toolkit.
 
@@ -38,6 +38,16 @@ The **Instrument** selector beside **Run Refinement** has four choices:
 Choose the instrument used for a sample scan. Each named instrument loads its
 bundled calibration and geometry. Scan range, source, and other scan inputs
 remain in **Scan Settings**.
+
+Instrument presets do not rescale intensity uncertainties. Named CSV exports
+use their intensity and uncertainty headers; Synergy files use `intx` and
+`sigx`, ignoring `d-value` for weighting. GOF is the square root of reduced
+chi-squared from the native GSAS-II refinement. A large GOF calls for checking
+the model, data processing and uncertainties; do not adjust uncertainties just
+to force GOF toward one. Version 1.2.2 and earlier reported Synergy-S GOF with
+an unsupported factor-of-five reduction, and could read `d-value` as sigma
+from five-column CSV files. Refit affected scans with this version.
+See [column definitions and uncertainty handling](docs/xrd_uncertainties.md).
 
 The **Benchtop Cu — flat plate (Si 640g)** entry loads the bundled
 `benchtop_Cu_Si640g.instprm` automatically. It is included in Git for other users

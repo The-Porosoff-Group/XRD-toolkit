@@ -18,7 +18,9 @@ class FitParameterExportTests(unittest.TestCase):
         result['gsas_native_parameters'] = {
             'final_project': {'Phases': 'NATIVE_TREE_MUST_NOT_APPEAR'},
             'input_files': {'cif_text': 'RAW_CIF_MUST_NOT_APPEAR' * 10000},
-            'effective_settings': {'n_bg_coeffs': 8},
+            'effective_settings': {'n_bg_coeffs': 8,
+                                   'uncertainty_policy': 'input_sigma_no_rescaling',
+                                   'histogram_weight_factor': 1.0},
         }
         result['fit_settings'] = {
             'software': {'toolkit_version': '1.2.2'},
@@ -58,6 +60,9 @@ class FitParameterExportTests(unittest.TestCase):
             self.assertEqual(values[('Scan settings', 'Instrument')], 'Benchtop Cu — flat plate (Si 640g)')
             self.assertEqual(values[('Scan settings', 'Background terms')], 'Auto')
             self.assertEqual(values[('Scan settings', 'Background terms used')], 8)
+            self.assertEqual(values[('Scan settings', 'Histogram weight factor')], 1.0)
+            self.assertEqual(values[('Scan settings', 'Intensity uncertainties')],
+                             'Input uncertainties; no preset rescaling')
             self.assertEqual(values[('Scan settings', 'Wavelength entered (Å)')], 1.54056)
             self.assertEqual(values[('Scan settings', 'Wavelength used (Å)')], 1.540593)
             self.assertEqual(values[('GSAS controls', 'Fix Y')], 'Unchecked')

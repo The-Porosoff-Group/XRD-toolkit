@@ -1434,7 +1434,9 @@ def _write_xye(path, tt, y_obs, sigma):
     """Write a .xye file (2theta  intensity  sigma) for GSAS-II import."""
     with open(path, 'w', encoding='utf-8', newline='\n') as f:
         for i in range(len(tt)):
-            f.write(f"{tt[i]:.6f}  {y_obs[i]:.4f}  {sigma[i]:.4f}\n")
+            # Preserve float precision, especially small positive uncertainties:
+            # fixed decimal formatting can round them to zero and erase weights.
+            f.write(f"{tt[i]:.17g}  {y_obs[i]:.17g}  {sigma[i]:.17g}\n")
 
 
 def _estimate_size_seed_um(tt, y_obs, wavelength):
@@ -1969,6 +1971,57 @@ def _get_project_covariance_data(gpx):
     return {}
 
 
+def _uncertainty_warning(y_obs, sigma, uncertainty_source=None):
+    """Flag a known counting-statistics estimate, not fractional data alone."""
+    estimated = (sigma is None or uncertainty_source in
+                 ('sqrt_intensity_estimate', 'mixed_input_and_estimate'))
+    if not estimated:
+        return None
+    values = np.asarray(y_obs, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size and np.any(np.abs(values - np.round(values)) > 1e-6):
+        return (
+            'Some intensity uncertainties were estimated as sqrt(max(I, 1)) '
+            'for data containing fractional intensities. If intensities are '
+            'count rates, normalized, or integrated, this estimate may not '
+            'describe their uncertainty. Supply propagated intensity '
+            'uncertainties before interpreting chi-squared, GOF, or '
+            'statistical parameter errors.')
+    return None
+
+
+def _gsas_fit_statistics(histogram, covariance):
+    """Use the fitted GSAS weights and parameter count, then native R factors.
+
+    The toolkit fits one histogram per project, so the project's native GOF
+    applies to this result. Never rescale it using an instrument preset.
+    """
+    summary = histogram.data['data'][0]
+    arrays = [np.ma.asarray(histogram.getdata(key), dtype=float)
+              for key in ('x', 'yobs', 'ycalc', 'yweight')]
+    x, observed, calculated, weights = [np.ma.getdata(a) for a in arrays]
+    valid = np.ones(x.shape, dtype=bool)
+    for array in arrays:
+        valid &= ~np.ma.getmaskarray(array) & np.isfinite(np.ma.getdata(array))
+    limits = histogram.data['Limits'][1]
+    valid &= (x >= limits[0]) & (x <= limits[1]) & (weights > 0)
+    rvals = covariance.get('Rvals') or {}
+    n_params = int(rvals.get('Nvars', len(covariance.get('varyList', []))))
+    stats = compute_fit_statistics(
+        observed[valid], calculated[valid],
+        weights[valid] * float(summary.get('wtFactor', 1.0)), n_params)
+    # Actual native statistics also account for GSAS exclusions/restraints.
+    for key, value in (('Rwp', rvals.get('Rwp', summary.get('wR'))),
+                       ('Rp', summary.get('R'))):
+        if value is not None and math.isfinite(float(value)):
+            stats[key] = round(float(value), 2)
+    gof = rvals.get('GOF')
+    if gof is not None and math.isfinite(float(gof)):
+        stats['GoF'] = round(float(gof), 3)
+        stats['chi2'] = round(float(gof) ** 2, 3)
+    return stats
+
+
 def _prepared_cif_reference(cif_text, fallback=None):
     """Return the axis-consistent reference model from the CIF sent to GSAS."""
     fallback = fallback or {}
@@ -2105,6 +2158,8 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
     # ── Parse options with safe defaults ───────────────────────────────────
     # Options can override profile defaults where needed.
     options = options or {}
+    uncertainty_source = ('sqrt_intensity_estimate' if sigma is None else
+                          options.get('uncertainty_source') or 'unknown')
     geometry             = options.get('geometry', profile['geometry'])
     preferred_orientation = options.get('preferred_orientation',
                                         profile['preferred_orientation_default'])
@@ -2371,13 +2426,10 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
     if sh_l is None:
         sh_l = profile['sh_l']
 
-    # Sigma inflation factor — profile-specific
-    _SIGMA_INFLATION_FACTOR = profile.get('sigma_inflation_K', 1.0)
-
     print(f"  Options: geometry={geometry}, PO={preferred_orientation}, "
           f"XYZ={refine_xyz}, BG={background_mode}, "
           f"exclude={len(exclude_regions)} regions, "
-          f"sigma_K={_SIGMA_INFLATION_FACTOR}", flush=True)
+          f"uncertainties=unscaled input", flush=True)
 
     # Validate: all phases need CIF text
     missing = [ph.get('name', '?') for ph in phases if not ph.get('cif_text')]
@@ -2624,41 +2676,12 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         # Set data range
         histogram.data['Limits'] = [[tt_min, tt_max], [tt_min, tt_max]]
 
-        # ── Sigma inflation for 2D-integrated / capillary data ─────────
-        # Data exported from CrysAlisPro powder generation (or any
-        # similar 2D→1D ring-integration pipeline: Dioptas, pyFAI, GSAS-II
-        # 2D, etc.) carries per-point σ that reflects ONLY counting
-        # statistics across thousands of detector pixels per 2θ bin.
-        # Those σ are typically 20–40× tighter than classical √I Poisson
-        # on the summed ring — statistically correct for random noise,
-        # but they do not include experimental systematics (beam drift,
-        # capillary transparency tail, sample-height micromotion, detector
-        # response nonuniformities).
-        #
-        # GSAS-II weights each point by w = 1/σ², so tight σ inflate
-        # reduced χ² and GoF even when the structural model is sound.
-        # For the WC/W2C Synergy-Dualflex dataset, reduced χ² ≈ 87 while
-        # Rwp ≈ 4.8% — a classic signature of underestimated σ, not a
-        # broken fit.  Inflate σ by a fixed factor via wtFactor (which
-        # multiplies w uniformly: setting wtFactor = 1/K² inflates σ by
-        # K and divides reduced χ² by K²).  Rwp is invariant under
-        # uniform σ scaling because it is a ratio.
-        #
-        # Sigma inflation factor K is now instrument-profile-specific:
-        #   synergy_s:  K=5.0 (2D-integrated σ underestimates uncertainty)
-        #   smartlab:   K=1.0 (σ ≈ √I is already correct for BB)
-        # The value was resolved from the instrument profile at the top
-        # of this function into _SIGMA_INFLATION_FACTOR.
-        try:
-            _wt = 1.0 / (_SIGMA_INFLATION_FACTOR ** 2)
-            histogram.data['wtFactor'] = _wt
-            print(f"  σ inflation: wtFactor = {_wt:.4f} "
-                  f"(σ × {_SIGMA_INFLATION_FACTOR:.1f}, reduced χ² ÷ "
-                  f"{_SIGMA_INFLATION_FACTOR ** 2:.0f}). "
-                  f"Rwp is invariant under this rescaling.", flush=True)
-        except (KeyError, TypeError) as _wt_e:
-            print(f"  WARNING: could not set wtFactor — {_wt_e}",
-                  flush=True)
+        # Instrument geometry/profile does not justify changing intensity
+        # uncertainties. GSAS stores this factor inside data[0], not at the
+        # histogram tree's top level. Keep source uncertainties unscaled.
+        histogram.data['data'][0]['wtFactor'] = 1.0
+        print('  Uncertainties: input sigma; histogram weight factor = 1.0.',
+              flush=True)
 
         # Fix histogram scale to 1.0 — NEVER refine it.
         # GSAS-II has N+1 scale parameters (N phase scales + 1 histogram
@@ -4085,7 +4108,10 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
             'n_bg_coeffs': n_bg_coeffs, 'max_cycles': max_cycles,
             'cycle_multiplier': _cyc_mult, 'auto_bg': auto_bg,
             'background_mode': background_mode, 'exclude_regions': exclude_regions,
-            'sigma_inflation_factor': _SIGMA_INFLATION_FACTOR,
+            'sigma_inflation_factor': 1.0,
+            'uncertainty_policy': 'input_sigma_no_rescaling',
+            'uncertainty_source': uncertainty_source,
+            'histogram_weight_factor': histogram.data['data'][0]['wtFactor'],
             'seed_active': _seed_active, 'cu_doublet': _use_doublet,
             'polariz': polariz, 'sh_l': sh_l,
             'preferred_orientation': preferred_orientation,
@@ -4239,36 +4265,7 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
 
         diff_out = y_obs_out - y_calc_out
 
-        # ── REGRESSION CHECK: wtFactor must be included in chi²/GoF ────
-        # Without this, reported GoF is inflated by K (sigma inflation
-        # factor) even though Rwp/Rp are correct (overridden by GSAS-II's
-        # own R-factors below).  This was a reporting bug found 2026-04-16.
-        # If _SIGMA_INFLATION_FACTOR changes, this section automatically
-        # stays in sync because we use the constant directly rather than
-        # reading wtFactor back from histogram.data (GSAS-II may clear
-        # or relocate that key during refinement cycles).
-        base_weights = 1.0 / np.maximum(
-            np.where(sig_r is not None, sig_r**2,
-                     np.maximum(y_obs_out, 1.0)), 1e-6)
-        weights_out = base_weights / (_SIGMA_INFLATION_FACTOR ** 2)
-
-        # Compute statistics using GSAS-II's actual background
-        n_params_est = sum(
-            len(list(phase_obj.atoms())) + 7  # atoms + cell + scale + profile
-            for phase_obj in gsas_phases
-        ) + n_bg_coeffs + 1
-        stats = compute_fit_statistics(y_obs_out, y_calc_out,
-                                        weights_out, n_params_est)
-
-        # Prefer GSAS-II's own R-factors (computed consistently with
-        # its own background and weighting scheme)
-        try:
-            gsas_stats = histogram.get_statistics()
-            if gsas_stats:
-                stats['Rwp'] = round(gsas_stats.get('Rwp', stats['Rwp']), 2)
-                stats['Rp'] = round(gsas_stats.get('Rp', stats['Rp']), 2)
-        except Exception:
-            pass
+        stats = _gsas_fit_statistics(histogram, cov_data)
 
         # Use the display-corrected background for the output (plots)
         # but keep _y_bg_gsas for phase isolation (unchanged)
@@ -5463,6 +5460,10 @@ def run_gsas2(tt, y_obs, sigma, phases, wavelength,
         # Flag suspicious results without failing the run.  Useful for
         # automated screening where a low Rwp is not always trustworthy.
         _sanity_warnings = list(_validation_warnings) + _mass_warnings
+
+        _sigma_warning = _uncertainty_warning(y_r, sigma, uncertainty_source)
+        if _sigma_warning:
+            _sanity_warnings.append(_sigma_warning)
 
         if _any_hap_broadening_requested and not _measured_instprm:
             _sanity_warnings.append(

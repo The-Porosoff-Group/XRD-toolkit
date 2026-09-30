@@ -1,5 +1,19 @@
 # Release notes
 
+## 1.2.3 — 2026-09-30
+
+- Remove the automatic fivefold uncertainty adjustment from Synergy-S. All
+  instrument presets retain input uncertainties without rescaling.
+- Report GOF and reduced chi-squared from the saved GSAS-II refinement, using
+  actual weights and refined parameter counts instead of preset adjustments.
+- Read named CSV columns, including Synergy's `intx` and `sigx`, so d-spacing
+  is not mistaken for intensity uncertainty. Skip explicitly unmeasured bins
+  and reject invalid supplied uncertainties in measured bins.
+- Record the uncertainty policy and histogram weight factor in fit exports.
+- Preserve full floating-point precision in intermediate GSAS input files so
+  small positive uncertainties are not rounded to zero.
+  Existing results are unchanged; affected scans need a new fit.
+
 ## 1.2.2 — 2026-09-24
 
 - Make the XRD workbook's **Fit Parameters** tab a readable recipe for repeating
