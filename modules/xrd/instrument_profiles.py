@@ -56,7 +56,7 @@ INSTRUMENT_PROFILES = {
         instprm_filename='smartlab_Si640g.instprm',
         notes='Bundled SmartLab profile; use only with its matching configuration.'),
     'synergy_s': dict(geometry_profile('capillary'),
-        label='Synergy-S (capillary)', zero_seed=-0.25, sigma_inflation_K=5.0,
+        label='Synergy-S (capillary)', zero_seed=-0.25,
         instprm_filename='synergy_s_Si640g.instprm',
         notes='Bundled Synergy-S profile; use only with its matching configuration.'),
 }

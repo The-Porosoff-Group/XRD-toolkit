@@ -60,6 +60,13 @@ def parse_xrd_file(filepath):
     raw   = raw.replace('\r\n', '\n').replace('\r', '\n')
     lines = [l for l in raw.splitlines() if l.strip()]
 
+    # Named CSV columns take priority over positional text formats. In
+    # Synergy exports column 3 is d-spacing, not intensity uncertainty.
+    if ext == '.csv':
+        parsed = _parse_csv_columns(lines)
+        if parsed is not None:
+            return parsed
+
     # PowderGraph format
     if '[PowderGraph' in raw or (len(lines) > 1 and '2thetadeg' in lines[1].lower()):
         return _parse_powdergraph(lines)
@@ -269,8 +276,67 @@ def _parse_xlsx(filepath):
     raise ValueError('No usable 2theta/intensity columns found in Excel XRD file.')
 
 
+def _parse_csv_columns(lines):
+    """Read named intensity/error columns, retaining their supplied units."""
+    import csv
+
+    rows = list(csv.reader(lines))
+    for header_row, row in enumerate(rows[:30]):
+        headers = [_norm_header(value) for value in row]
+        tt_idx = _pick_column(headers, [('2thetadeg', '2theta', 'twotheta',
+                                        'twothetadeg', 'angle', 'x')])
+        int_idx = _pick_column(headers, [('intx',),
+                                        ('intensity', 'intensitycounts', 'counts', 'count', 'y')])
+        if tt_idx is not None and int_idx is not None and tt_idx != int_idx:
+            break
+    else:
+        return None
+
+    sig_idx = _pick_column(headers, [('sigx',),
+                                    ('sigma', 'error', 'err', 'esd', 'stddev', 'stdev')])
+    # A separate count column describes whether a bin was measured. When
+    # count itself is the intensity, zero counts are valid observations.
+    count_idx = _pick_column(headers, [('count', 'counts')])
+    if count_idx == int_idx:
+        count_idx = None
+    points, excluded = [], 0
+    for row_number, row in enumerate(rows[header_row + 1:], start=header_row + 2):
+        def value(index):
+            return _to_float(row[index]) if index is not None and index < len(row) else None
+
+        tt, intensity = value(tt_idx), value(int_idx)
+        if tt is None or intensity is None or tt <= 0 or intensity < 0:
+            continue
+        count = value(count_idx)
+        if count is not None and count <= 0:
+            excluded += 1
+            continue
+        sigma = value(sig_idx) if sig_idx is not None else math.sqrt(max(intensity, 1.0))
+        if sigma is None or sigma <= 0:
+            raise ValueError(
+                f'CSV row {row_number}: intensity uncertainty in column '
+                f'"{rows[header_row][sig_idx]}" must be finite and positive. '
+                'Exclude unmeasured bins or supply valid uncertainties.')
+        points.append((tt, intensity, sigma))
+    if not points:
+        raise ValueError('No measured XRD points found in the named CSV columns.')
+    values = np.asarray(points, dtype=float)
+    return {
+        'tt': values[:, 0], 'intensity': values[:, 1], 'sigma': values[:, 2],
+        'metadata': {
+            'format': 'CSV',
+            'columns': {'2theta': rows[header_row][tt_idx],
+                        'intensity': rows[header_row][int_idx],
+                        'sigma': rows[header_row][sig_idx] if sig_idx is not None else None},
+            'sigma_source': 'input_column' if sig_idx is not None else 'sqrt_intensity_estimate',
+            'excluded_unmeasured_rows': excluded,
+        },
+    }
+
+
 def _parse_generic(lines, ext):
     tt_list, int_list, sig_list = [], [], []
+    sigma_sources = set()
     sep = ',' if ext == '.csv' else None
     for line in lines:
         line = line.strip()
@@ -285,13 +351,17 @@ def _parse_generic(lines, ext):
             sx = float(parts[2]) if len(parts) > 2 else math.sqrt(max(ix, 1))
             if tt > 0 and ix >= 0:
                 tt_list.append(tt); int_list.append(ix); sig_list.append(sx)
+                sigma_sources.add('input_column' if len(parts) > 2
+                                  else 'sqrt_intensity_estimate')
         except (ValueError, IndexError):
             continue
     return {
         'tt':        np.array(tt_list),
         'intensity': np.array(int_list),
         'sigma':     np.array(sig_list),
-        'metadata':  {},
+        'metadata':  {'sigma_source': (next(iter(sigma_sources))
+                      if len(sigma_sources) == 1 else
+                      'mixed_input_and_estimate' if sigma_sources else 'unknown')},
     }
 
 
@@ -1005,7 +1075,10 @@ def run(filepath, output_dir, metadata, params):
 
         # Build options dict from params — callers can pass these
         # through the params dict or leave them unset for defaults.
-        _gsas_options = {'spectrum': params.get('spectrum', 'auto')}
+        _gsas_options = {
+            'spectrum': params.get('spectrum', 'auto'),
+            'uncertainty_source': data.get('metadata', {}).get('sigma_source', 'unknown'),
+        }
         for _opt_key in ('geometry', 'preferred_orientation', 'refine_xyz',
                          'background_mode', 'exclude_regions',
                          'phase_sensitivity', 'verification_mode',

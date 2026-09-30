@@ -136,6 +136,9 @@ def fit_parameter_rows(result, metadata, method_label):
     add('Scan settings', 'Background terms', 'Auto' if str(background).lower() == 'auto' else _number(background))
     if resolved.get('n_bg_coeffs') is not None:
         add('Scan settings', 'Background terms used', _number(resolved['n_bg_coeffs']))
+    if resolved.get('uncertainty_policy') == 'input_sigma_no_rescaling':
+        add('Scan settings', 'Intensity uncertainties', 'Input uncertainties; no preset rescaling')
+        add('Scan settings', 'Histogram weight factor', _number(resolved.get('histogram_weight_factor')))
 
     if 'gsas' in method_label.lower():
         for dom_id, key, label in _GLOBAL_CONTROLS:
