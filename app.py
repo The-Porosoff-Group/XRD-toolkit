@@ -4,7 +4,7 @@ Local web server. Run with:  python app.py
 Then open:  http://localhost:5000
 """
 
-import os, sys, re, json, base64, webbrowser, traceback, secrets
+import os, sys, re, json, base64, webbrowser, traceback, secrets, tempfile
 
 # Force unbuffered/line-buffered stdout so GSAS-II refinement progress
 # appears in terminal immediately.  os.environ alone doesn't work because
@@ -62,10 +62,15 @@ import yaml
 from flask import Flask, render_template, request, jsonify, send_file
 from toolkit_version import APP_VERSION
 from flask.json.provider import DefaultJSONProvider
+from modules.json_safety import json_safe_value
 
 
 class NumpyJSONProvider(DefaultJSONProvider):
-    """JSON provider that serialises numpy scalars and arrays."""
+    """JSON provider for numpy values and standards-compliant numbers."""
+
+    def dumps(self, obj, **kwargs):
+        kwargs['allow_nan'] = False
+        return super().dumps(json_safe_value(obj), **kwargs)
 
     def default(self, o):
         if isinstance(o, np.integer):
@@ -151,6 +156,7 @@ def load_config():
 
 CONFIG = load_config()
 MP_API_KEY   = CONFIG['materials_project'].get('api_key', '').strip()
+_mp_key_lock = Lock()
 CACHE_DIR    = CONFIG['cache'].get('directory', '~/.catalysis_toolkit_cache')
 CACHE_MAX_MB = CONFIG['cache'].get('max_size_mb', 500)
 MAX_OUTER    = CONFIG['performance'].get('max_outer_iterations', 10)
@@ -173,6 +179,7 @@ from xrd.cod_api   import (search_by_elements  as cod_search_elements,
                             fetch_cif           as cod_fetch_cif,
                             get_stick_pattern,  SORT_OPTIONS)
 from xrd.presentation import export_file_prefix
+from xrd.search_terms import candidate_search_text
 
 # Initialise cache with config settings
 _cache = get_cache(cache_dir=CACHE_DIR, max_size_mb=CACHE_MAX_MB)
@@ -375,6 +382,10 @@ def xrd_search():
         limit      = min(int(data.get('limit', 100)), 200)
         source     = data.get('source', 'cod')  # 'cod' or 'mp' or 'both'
 
+        if source == 'mp' and not MP_API_KEY:
+            return jsonify({'error': 'No Materials Project API key configured. '
+                            'Open MP API key settings to add one.'}), 400
+
         cod_results = []
         mp_results  = []
 
@@ -401,13 +412,13 @@ def xrd_search():
             if formula:
                 r = mp_search_formula(formula, MP_API_KEY,
                                        max_results=limit, sort_by=sort_by)
-            elif elements:
-                r = mp_search_elements(elements, MP_API_KEY, strict=strict,
-                                        max_results=limit, sort_by=sort_by)
             elif name:
                 # MP has no free-text search — use our smart name→elements fallback
                 r = mp_search_name(name, MP_API_KEY,
-                                    max_results=limit, sort_by=sort_by)
+                                    max_results=limit, sort_by=sort_by, strict=strict)
+            elif elements:
+                r = mp_search_elements(elements, MP_API_KEY, strict=strict,
+                                        max_results=limit, sort_by=sort_by)
             else:
                 r = []
             if isinstance(r, list):
@@ -446,8 +457,9 @@ def xrd_search():
                       f"{entry.get('formula', '?')}: {_e}", flush=True)
                 entry['stick_pattern'] = []
 
-        # Cache any CIF text that came back inline with MP results
+        # Index candidate metadata and cache any inline CIF text.
         for entry in combined:
+            entry['search_text'] = candidate_search_text(entry)
             cif_text = entry.pop('_cif_text', '')
             if cif_text and '_cell_length_a' in cif_text:
                 mp_id     = entry.get('mp_id', entry.get('cod_id', ''))
@@ -531,6 +543,7 @@ def xrd_fetch_cif():
             print(f"  phase_hint merge: applied display/intent metadata "
                   f"only for {cod_id}; CIF cell remains authoritative.",
                   flush=True)
+
         # Store CIF text server-side; don't send over wire
         cif_text  = result.pop('cif_text', '')
         cache_key = (
@@ -1015,10 +1028,67 @@ def mp_debug():
 
 @app.route('/api/xrd/validate_mp_key', methods=['POST'])
 def validate_mp_key():
-    data = request.get_json() or {}
-    key  = data.get('api_key', MP_API_KEY).strip()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Provide a JSON object.'}), 400
+    key = data.get('api_key', MP_API_KEY)
+    if not isinstance(key, str):
+        return jsonify({'error': 'API key must be text.'}), 400
+    key = key.strip()
     valid, msg = mp_validate_key(key)
     return jsonify({'valid': valid, 'message': msg})
+
+
+def _save_mp_key(key):
+    """Persist only the key, then activate it; failed writes keep the old key."""
+    global MP_API_KEY
+    with _mp_key_lock:
+        config = {}
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, encoding='utf-8') as handle:
+                config = yaml.safe_load(handle) or {}
+        if not isinstance(config, dict):
+            raise ValueError('Invalid configuration')
+        section = config.setdefault('materials_project', {})
+        if not isinstance(section, dict):
+            raise ValueError('Invalid Materials Project configuration')
+        section['api_key'] = key
+        # Replace atomically so a failed write cannot truncate the configuration.
+        fd, temporary_path = tempfile.mkstemp(
+            prefix='.mp-config-', suffix='.tmp', dir=os.path.dirname(CONFIG_PATH))
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+                yaml.safe_dump(config, handle, sort_keys=False, allow_unicode=True)
+            os.replace(temporary_path, CONFIG_PATH)
+        finally:
+            if os.path.exists(temporary_path):
+                os.unlink(temporary_path)
+        CONFIG['materials_project']['api_key'] = key
+        MP_API_KEY = key
+
+
+@app.route('/api/xrd/mp_key', methods=['PUT', 'DELETE'])
+def update_mp_key():
+    key = ''
+    if request.method == 'PUT':
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict) or not isinstance(data.get('api_key'), str):
+            return jsonify({'error': 'Provide an API key as text.'}), 400
+        key = data['api_key'].strip()
+        if not 10 <= len(key) <= 256 or not key.isascii() or any(
+                char.isspace() or not char.isprintable() for char in key):
+            return jsonify({'error': 'Paste a valid API key, or use Remove key '
+                            'to delete the saved key.'}), 400
+    try:
+        _save_mp_key(key)
+    except Exception:
+        # Do not return parser errors that could contain the saved credential.
+        return jsonify({'error': 'Could not update config.yaml. Check that it is '
+                        'valid YAML and writable. The saved key was not changed.'}), 500
+    return jsonify({'mp_key_set': bool(key), 'message': (
+        'API key saved. New searches use it immediately.' if key else
+        'API key removed. Materials Project searches are disabled. '
+        'You can still upload CIF files.')})
 
 
 @app.route('/api/xrd/gsas2_status', methods=['GET'])

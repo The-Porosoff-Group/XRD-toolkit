@@ -15,24 +15,21 @@ This version opens directly into the XRD workflow and hides unfinished modules. 
 ## Quick Start
 
 1. Download or clone this repository.
-2. Add your Materials Project API key:
-
-   ```bat
-   copy config.yaml.example config.yaml
-   notepad config.yaml
-   ```
-
-3. Start the XRD-only GUI:
+2. Start the XRD-only GUI:
 
    ```bat
    xrd_toolkit\run_xrd_toolkit.bat
    ```
 
-4. Open, if the browser does not open automatically:
+3. Open, if the browser does not open automatically:
 
    ```text
    http://localhost:5000/xrd
    ```
+
+4. Expand **MP API key settings** in the phase-search panel to save or replace
+   your Materials Project API key. New searches use the saved key immediately.
+   A key is optional when uploading CIFs or calibrating an instrument.
 
 The first launch creates a local Python environment and installs dependencies. GSAS-II installation can take several minutes.
 
@@ -106,7 +103,8 @@ interface no longer asks for a local instrument name or saves named profiles.
 ## Main Features
 
 - XRD file upload with live preview (`.dat`, `.xy`, `.xye`, `.csv`, `.txt`, `.xlsx`)
-- Materials Project phase search
+- Materials Project chemical-name/formula search, candidate keyword filtering,
+  and in-app API-key settings
 - Manual CIF upload
 - Versioned CIF caching and pre-refinement validation
 - Correct preview tick generation from imported phases

@@ -1,0 +1,19 @@
+<details id="mp-key-settings" style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;" {% if not mp_key_set %}open{% endif %}>
+  <summary style="cursor:pointer;font-size:12px;font-weight:600;">Materials Project API key · add, edit, or remove</summary>
+  <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
+    <div id="mp-key-state" style="font-size:12px;color:var(--muted);"></div>
+    <label for="mp-api-key">API key</label>
+    <input type="password" id="mp-api-key" autocomplete="off" spellcheck="false"
+           placeholder="Paste your Materials Project API key" style="max-width:440px;"
+           onkeydown="if(event.key==='Enter') { event.preventDefault(); manageMpKey('save'); }">
+    <div style="display:flex;flex-wrap:wrap;gap:8px;">
+      <button type="button" class="btn-sm" id="mp-key-save" onclick="manageMpKey('save')">Save key</button>
+      <button type="button" class="btn-sm" id="mp-key-test" onclick="manageMpKey('test')">Test key</button>
+      <button type="button" class="btn-sm" id="mp-key-remove" onclick="manageMpKey('remove')">Remove key</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted);">Saved locally in config.yaml; changes apply immediately. Leave the field empty to test the saved key.
+      <a href="https://next-gen.materialsproject.org/api" target="_blank" rel="noopener noreferrer" style="color:var(--accent);">Get an API key</a>.
+    </div>
+    <div id="mp-key-feedback" role="status" aria-live="polite" style="font-size:12px;min-height:16px;"></div>
+  </div>
+</details>

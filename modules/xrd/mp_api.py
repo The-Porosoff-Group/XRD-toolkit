@@ -18,6 +18,7 @@ import math, os, re, requests, json
 from .crystallography import parse_cif, conventionalize_phase_cell
 from .cod_api import infer_system, _sf
 from .cif_cache import normalize_mp_id
+from .search_terms import NAME_TO_ELEMENT, COMPOUND_TERMS
 
 MP_SUMMARY = "https://api.materialsproject.org/materials/summary/"
 TIMEOUT    = 15
@@ -214,7 +215,7 @@ def _get(params, api_key):
 
     if resp.status_code == 403:
         return {"error": "Materials Project API key invalid or expired. "
-                         "Check config.yaml — make sure it is the key from "
+                         "Open MP API key settings — use the key from "
                          "next-gen.materialsproject.org/api, not legacy."}
     if resp.status_code == 400:
         return {"error": f"Bad request to Materials Project API. "
@@ -226,7 +227,7 @@ def _get(params, api_key):
 def search_by_elements(elements, api_key, strict=True,
                         max_results=50, sort_by="formula"):
     if not api_key:
-        return {"error": "No Materials Project API key. Add to config.yaml."}
+        return {"error": "No Materials Project API key. Open MP API key settings."}
     elements = [e.strip().capitalize() for e in elements if e.strip()]
     if not elements:
         return {"error": "No elements provided."}
@@ -249,7 +250,7 @@ def search_by_elements(elements, api_key, strict=True,
 
 def search_by_formula(formula, api_key, max_results=50, sort_by="formula"):
     if not api_key:
-        return {"error": "No Materials Project API key. Add to config.yaml."}
+        return {"error": "No Materials Project API key. Open MP API key settings."}
     formula = _normalize_formula_case(formula)
     if not formula:
         return []
@@ -279,57 +280,48 @@ def search_by_formula(formula, api_key, max_results=50, sort_by="formula"):
         return {"error": f"Materials Project search error: {e}"}
 
 
-def search_by_name(name, api_key, max_results=50, sort_by="formula"):
-    """
-    MP has no free-text search. Routes by input type:
-    - Looks like a formula (W2C, WC, Mo2C) → formula search
-    - Contains known element symbols (W, Mo, Fe) → chemsys search
-    - Plain English names → try to map common words to elements, then chemsys
+def search_by_name(name, api_key, max_results=50, sort_by="formula", strict=True):
+    """Resolve chemical names before attempting formula parsing.
+
+    MP's summary search accepts chemistry filters, not arbitrary descriptions.
+    Consume the complete name so unsupported words cannot silently change a query.
     """
     if not api_key:
-        return {"error": "No Materials Project API key. Add to config.yaml."}
+        return {"error": "No Materials Project API key. Open MP API key settings."}
     name = name.strip()
     if not name:
         return []
 
-    # Common element name → symbol mappings
-    _NAME_MAP = {
-        "tungsten": "W", "molybdenum": "Mo", "iron": "Fe", "carbon": "C",
-        "nitrogen": "N", "oxygen": "O", "silicon": "Si", "nickel": "Ni",
-        "cobalt": "Co", "copper": "Cu", "chromium": "Cr", "vanadium": "V",
-        "titanium": "Ti", "zirconium": "Zr", "hafnium": "Hf", "niobium": "Nb",
-        "tantalum": "Ta", "rhenium": "Re", "ruthenium": "Ru", "palladium": "Pd",
-        "platinum": "Pt", "gold": "Au", "silver": "Ag", "aluminium": "Al",
-        "aluminum": "Al", "manganese": "Mn", "zinc": "Zn", "tin": "Sn",
-        "lead": "Pb", "sulfur": "S", "phosphorus": "P", "boron": "B",
-        "carbide": "C", "nitride": "N", "oxide": "O", "silicide": "Si",
-    }
-
-    # If it looks like a formula (starts uppercase, only letters/digits, no spaces)
-    _compact_name = name.replace(" ", "")
-    _maybe_formula = _normalize_formula_case(_compact_name)
-    if (len(_compact_name) <= 8
-            and re.match(r"^[A-Z][a-zA-Z0-9]*$", _maybe_formula)):
-        return search_by_formula(_maybe_formula, api_key, max_results, sort_by)
-
-    # Try to extract element symbols — first from capitalised tokens (e.g. "W C Mo")
-    words = name.replace("-", " ").split()
+    # An oxidation state in a chemical name does not change its element set.
+    words = re.sub(r"\([IVXivx]+\)", " ", name)
+    words = re.split(r"[\s,;()/–—-]+", words.strip())
     elements = []
-    for word in words:
-        w = word.strip("(),.")
-        # Direct element symbol match (1-2 chars, starts uppercase)
-        if re.match(r"^[A-Z][a-z]?$", w):
-            elements.append(w)
-        # English name lookup
-        elif w.lower() in _NAME_MAP:
-            el = _NAME_MAP[w.lower()]
-            if el not in elements:
-                elements.append(el)
+    for word in filter(None, words):
+        symbol = (NAME_TO_ELEMENT.get(word.lower())
+                  or COMPOUND_TERMS.get(word.lower()))
+        if not symbol and (word in _VALID_ELEMENTS or
+                           (word.islower() and word.capitalize() in _VALID_ELEMENTS)):
+            symbol = word.capitalize()
+        if not symbol:
+            break
+        if symbol not in elements:
+            elements.append(symbol)
+    else:
+        if elements:
+            return search_by_elements(elements, api_key, strict=strict,
+                                      max_results=max_results, sort_by=sort_by)
 
-    if elements:
-        return search_by_elements(elements, api_key, strict=True,
-                                   max_results=max_results, sort_by=sort_by)
-    return []
+    # Only whole, valid chemical formulas may use the formula endpoint.
+    # Do not concatenate prose into something that happens to parse as chemistry.
+    formula = _normalize_formula_case(name)
+    if (not re.search(r"\s", name)
+            and re.fullmatch(r"(?:[A-Z][a-z]?(?:\d+(?:\.\d+)?)?)+", formula)
+            and all(el in _VALID_ELEMENTS for el in re.findall(r"[A-Z][a-z]?", formula))):
+        return search_by_formula(formula, api_key, max_results, sort_by)
+    return {"error": "Materials Project search supports element names (tungsten), "
+                     "chemical names (tungsten carbide), and formulas (W2C). "
+                     "General description or mineral-name search is not supported. "
+                     "Use Filter results to search text in returned candidates."}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
