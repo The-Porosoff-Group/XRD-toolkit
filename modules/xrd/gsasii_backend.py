@@ -90,13 +90,16 @@ try:
     import GSASII.GSASIIscriptable as G2sc
     import GSASII.GSASIIpwd as G2pwd
     _GSASII_AVAILABLE = True
-except ImportError:
+except Exception:
+    # Not just ImportError: when the GSASII source dir is on sys.path directly,
+    # `GSASII` resolves to the wxPython GUI module GSASII.py, which raises
+    # NameError on import in a headless env. Fall through to the flat import.
     try:
         # Direct import (gsas2pkg installs GSASII/ dir; backcompat or GSASII on path)
         import GSASIIscriptable as G2sc
         import GSASIIpwd as G2pwd
         _GSASII_AVAILABLE = True
-    except ImportError as e:
+    except Exception as e:
         _GSASII_IMPORT_ERROR = str(e)
 
 try:

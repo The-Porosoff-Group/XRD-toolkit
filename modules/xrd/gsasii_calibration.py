@@ -296,7 +296,7 @@ def _install_safe_gsas_pinv():
         return
     try:
         from GSASII import GSASIImath as G2mth
-    except ImportError:
+    except Exception:
         import GSASIImath as G2mth
 
     def _safe_pinv(a, rcond=1e-15):
@@ -776,7 +776,7 @@ def run_calibration(tt, y_obs, sigma, phase, wavelength,
     _add_gsas2pkg_paths()
     try:
         from GSASII import GSASIIscriptable as G2sc
-    except ImportError:
+    except Exception:
         import GSASIIscriptable as G2sc
     _install_safe_gsas_pinv()
 

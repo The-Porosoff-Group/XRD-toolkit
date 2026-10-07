@@ -139,7 +139,7 @@
   .form-group { display: flex; flex-direction: column; gap: 5px; }
   .form-group.full { grid-column: 1 / -1; }
   label { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; }
-  input[type=text], input[type=number], textarea, select {
+  input[type=text], input[type=password], input[type=number], textarea, select {
     background: var(--surface2);
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -831,6 +831,8 @@
         <div class="card-body" style="display:flex;flex-direction:column;gap:14px;">
 
           <p id="xrd-calibration-phase-hint" style="display:none;margin:0;color:var(--muted);font-size:12px;">Calibration uses the built-in NIST Si 640g standard. Skip phase search, or select your instrument beside Run Refinement to fit sample phases.</p>
+          {% include 'xrd_shared/mp_key_settings.html' %}
+
           <!-- Search inputs -->
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto auto;gap:10px;align-items:flex-end;min-width:0;">
             <div class="form-group">
@@ -839,8 +841,8 @@
                      onkeydown="if(event.key==='Enter') searchPhases(false)">
             </div>
             <div class="form-group">
-              <label>Phase / keyword search</label>
-              <input type="text" id="xrd-phase-name" placeholder="e.g. molybdenum carbide"
+              <label>Element / chemical name</label>
+              <input type="text" id="xrd-phase-name" placeholder="e.g. tungsten carbide"
                      onkeydown="if(event.key==='Enter') searchPhases(false)">
             </div>
             <div class="form-group">
@@ -868,10 +870,12 @@
                      Hidden radio inputs preserve form-state compatibility for any
                      existing JS that reads xrd-source-db. -->
                 <input type="radio" name="xrd-source-db" value="mp" checked style="display:none;">
-                <span id="mp-key-badge"></span>
+                <span id="mp-key-badge" style="font-size:10px;padding:2px 7px;"></span>
               </div>
             </div>
           </div>
+
+          <div style="font-size:11px;color:var(--muted);">Name search accepts element names and chemical names, such as tungsten carbide. Search matches the listed elements; + Loose allows additional elements. Use Filter results for text in returned candidates. If multiple fields are filled, formula takes priority, then name, then elements.</div>
 
           <div id="xrd-search-status" style="font-size:12px;font-family:var(--mono);color:var(--muted);min-height:16px;"></div>
 
@@ -1945,22 +1949,11 @@ function updateWavelength() {
   if (val !== 'custom') document.getElementById('xrd-wavelength').value = val;
 }
 
-function updateSourceBadge() {
-  const src = document.querySelector('input[name="xrd-source-db"]:checked')?.value || 'both';
-  const badge = document.getElementById('mp-key-badge');
-  if (src === 'mp' || src === 'both') {
-    badge.innerHTML = window.mpKeySet
-      ? '<span class="pill green" style="font-size:10px;padding:2px 7px;">MP key ✓</span>'
-      : '<span class="pill yellow" style="font-size:10px;padding:2px 7px;" title="Add Materials Project API key to config.yaml">MP: no key</span>';
-  } else {
-    badge.innerHTML = '';
-  }
-}
-
+{% include 'xrd_shared/mp_key_settings.js' %}
 {% include 'xrd_shared/legend_settings.js' %}
+{% include 'xrd_shared/instrument_settings.js' %}
 
 // Toggle the GSAS-II Advanced settings row (collapsed by default).
-{% include 'xrd_shared/instrument_settings.js' %}
 // The contents are individually revealed when GSAS-II is available;
 // this function controls the wrapper visibility independently.
 function toggleXrdAdvanced() {
@@ -2130,14 +2123,14 @@ async function loadMoreCOD() {
 }
 
 function filterCandidates() {
-  const q = document.getElementById('xrd-filter').value.toLowerCase();
-  xrdFiltered = q
-    ? xrdCandidates.filter(c =>
-        (c.formula||'').toLowerCase().includes(q) ||
-        (c.name||'').toLowerCase().includes(q) ||
-        (c.spacegroup||'').toLowerCase().includes(q) ||
-        (c.mp_id||c.cod_id||'').includes(q) ||
-        (c.mineral||'').toLowerCase().includes(q))
+  const words = document.getElementById('xrd-filter').value.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  xrdFiltered = words.length
+    ? xrdCandidates.filter(candidate => {
+        const text = ['search_text', 'formula', 'name', 'description', 'spacegroup',
+          'system', 'mp_id', 'mp_api_id', 'cod_id', 'mineral', 'authors', 'journal', 'year']
+          .map(field => String(candidate[field] || '').toLowerCase()).join(' ');
+        return words.every(word => text.includes(word));
+      })
     : [...xrdCandidates];
   renderCandidates();
 }
